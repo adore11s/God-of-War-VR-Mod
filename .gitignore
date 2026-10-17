@@ -1,0 +1,11 @@
+# Written while installing / playing. None of it belongs in the repository.
+
+# Where the mod was installed and the settings.ini values it changed (read by the uninstaller)
+game_dir.txt
+settings_changed.txt
+
+# Logs, if a copy ends up here
+*.log
+
+# Build output (see CONTRIBUTING.md)
+build/
