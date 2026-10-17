@@ -85,6 +85,10 @@ template <class F> bool Get(XrInstance inst, const char* name, F& fn) {
 // ---- state -----------------------------------------------------------------------------------------------------------
 std::atomic<bool> g_want{false};
 char g_systemName[256] = "";
+// for the VR summary in the log (LogSummary)
+char g_runtimeJson[MAX_PATH + 32] = "";  // runtime manifest + where it came from
+char g_runtimeName[192] = "";            // the runtime's own name and version
+uint32_t g_eyeMaxW = 0, g_eyeMaxH = 0;   // largest eye image the runtime allows
 bool g_failed = false;  // a setup step failed: retry after g_retryAt (not every frame)
 uint64_t g_retryAt = 0;
 uint32_t g_failCount = 0;
@@ -456,13 +460,22 @@ void SyncInput(XrTime time) {
 
 // ---- runtime loading -------------------------------------------------------------------------------------------------
 bool LoadRuntime() {
+    // the runtime the OpenXR loader would pick: XR_RUNTIME_JSON (per-process override, e.g. Virtual Desktop's VDXR
+    // without making it the system runtime), else the system's active runtime
     wchar_t json[MAX_PATH] = L"";
-    DWORD sz = sizeof(json);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Khronos\\OpenXR\\1", L"ActiveRuntime", RRF_RT_REG_SZ, nullptr, json,
-                     &sz) != ERROR_SUCCESS) {
-        Log("xr: no active OpenXR runtime in the registry");
-        return false;
+    DWORD envLen = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", json, MAX_PATH);
+    if (envLen > 0 && envLen < MAX_PATH) {
+        Log("xr: runtime from XR_RUNTIME_JSON: %ls", json);
+    } else {
+        json[0] = 0;
+        DWORD sz = sizeof(json);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Khronos\\OpenXR\\1", L"ActiveRuntime", RRF_RT_REG_SZ, nullptr,
+                         json, &sz) != ERROR_SUCCESS) {
+            Log("xr: no active OpenXR runtime in the registry");
+            return false;
+        }
     }
+    sprintf_s(g_runtimeJson, "%ls (%s)", json, envLen > 0 && envLen < MAX_PATH ? "XR_RUNTIME_JSON" : "system default");
     FILE* f = nullptr;
     if (_wfopen_s(&f, json, L"rb") || !f) { Log("xr: cannot open %ls", json); return false; }
     char text[8192] = {};
@@ -629,9 +642,12 @@ bool CreateInstance() {
     }
     if (!CreateActions()) Log("xr: controller actions unavailable");
     XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
-    if (Succeeded(xrGetInstanceProperties(g_inst, &ip)))
+    if (Succeeded(xrGetInstanceProperties(g_inst, &ip))) {
         Log("xr: instance on %s %llu.%llu.%llu", ip.runtimeName, ip.runtimeVersion >> 48,
             (ip.runtimeVersion >> 32) & 0xffff, ip.runtimeVersion & 0xffffffff);
+        sprintf_s(g_runtimeName, "%s %llu.%llu.%llu", ip.runtimeName, ip.runtimeVersion >> 48,
+                  (ip.runtimeVersion >> 32) & 0xffff, ip.runtimeVersion & 0xffffffff);
+    }
     return true;
 }
 
@@ -758,6 +774,8 @@ bool CreateSession(ID3D11Device* dev) {
         EyeSwap& s = g_eye[e];
         s.w = vcv[e].recommendedImageRectWidth;
         s.h = vcv[e].recommendedImageRectHeight;
+        g_eyeMaxW = vcv[e].maxImageRectWidth;
+        g_eyeMaxH = vcv[e].maxImageRectHeight;
         XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
         ci.format = g_format;
@@ -991,6 +1009,141 @@ void ReleaseImage(EyeSwap& s) {
         static int logs = 0;
         if (logs++ < 10) Log("xr: release image: %s", ResultStr(r).c_str());
     }
+}
+
+// ---- VR summary in the log ------------------------------------------------------------------------------------------
+// Owner: a tester plays, sends gowvr.log, and the next update fixes their setup. Everything needed for that in one
+// block: runtime, headset, controllers, image sizes, field of view, the flat screen's and the HUD's size, the hand
+// offsets and the game's display settings. Logged once per distinct (stereo / flat screen, game resolution, controller
+// profiles) - the first stereo frame, the first flat screen, after a resolution change - at most 16 times.
+float Deg(float rad) { return rad * 57.2958f; }
+
+void QRotate(const float q[4], const float v[3], float out[3]) {  // q * v * q^-1, q = (x, y, z, w)
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float tx = 2.f * (y * v[2] - z * v[1]), ty = 2.f * (z * v[0] - x * v[2]), tz = 2.f * (x * v[1] - y * v[0]);
+    out[0] = v[0] + w * tx + (y * tz - z * ty);
+    out[1] = v[1] + w * ty + (z * tx - x * tz);
+    out[2] = v[2] + w * tz + (x * ty - y * tx);
+}
+
+// The aim pose seen from the grip pose: how the runtime's two controller poses differ (differs per runtime and
+// controller - the hand offsets for a new controller follow from it). Degrees: aim pointing up / left of the grip's
+// pointing direction, and its up direction twisted about it.
+void AimFromGrip(const HandState& h, char* out, size_t n) {
+    if (!h.active || !h.gripValid || !h.aimValid) { sprintf_s(out, n, "not tracked"); return; }
+    const float conj[4] = {-h.grip.q[0], -h.grip.q[1], -h.grip.q[2], h.grip.q[3]};
+    const float fwd[3] = {0.f, 0.f, -1.f}, up[3] = {0.f, 1.f, 0.f};
+    float fw[3], uw[3], f[3], u[3];
+    QRotate(h.aim.q, fwd, fw);
+    QRotate(h.aim.q, up, uw);
+    QRotate(conj, fw, f);
+    QRotate(conj, uw, u);
+    sprintf_s(out, n, "up %.0f left %.0f twist %.0f", Deg(asinf(fmaxf(-1.f, fminf(1.f, f[1])))), Deg(atan2f(-f[0], -f[2])),
+              Deg(atan2f(-u[0], u[1])));
+}
+
+// "Key=Value ; comment" from the game's settings.ini text
+std::string IniValue(const std::string& text, const char* key) {
+    const std::string k = std::string("\n") + key + "=";
+    size_t p = ("\n" + text).find(k);
+    if (p == std::string::npos) return "?";
+    p += k.size() - 1;  // in `text` (the prepended "\n" shifts by one)
+    size_t e = text.find_first_of(" \t;\r\n", p);
+    return text.substr(p, e == std::string::npos ? std::string::npos : e - p);
+}
+
+void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSnapshot& in, bool stereo, int number) {
+    Log("==== VR SUMMARY #%d (%s) ====", number, stereo ? "stereo game view" : "flat screen: menus / videos / loading");
+    Log("summary: mod gowvr %s", GOWVR_VERSION);
+    Log("summary: runtime %s | %s", g_runtimeName[0] ? g_runtimeName : "?", g_runtimeJson);
+    Log("summary: headset '%s'", g_systemName);
+    Log("summary: eye image %ux%u per eye (the runtime allows up to %ux%u)", g_eye[0].w, g_eye[0].h, g_eyeMaxW, g_eyeMaxH);
+    float fovW = 0.f, fovH = 0.f;
+    if (g_viewsValid) {
+        const XrFovf& l = g_views[0].fov;
+        const XrFovf& r = g_views[1].fov;
+        fovW = Deg(l.angleRight - l.angleLeft);
+        fovH = Deg(l.angleUp - l.angleDown);
+        Log("summary: eye fov deg (left right up down): L %.1f %.1f %.1f %.1f, R %.1f %.1f %.1f %.1f -> %.0f x %.0f deg per eye",
+            Deg(l.angleLeft), Deg(l.angleRight), Deg(l.angleUp), Deg(l.angleDown), Deg(r.angleLeft), Deg(r.angleRight),
+            Deg(r.angleUp), Deg(r.angleDown), fovW, fovH);
+    } else {
+        Log("summary: eye fov not located yet");
+    }
+    // the game's picture, its window and the monitor it is on (true pixels, whatever the Windows scaling)
+    RECT cr{};
+    GetClientRect(d.OutputWindow, &cr);
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    const bool mon = GetMonitorInfoW(MonitorFromWindow(d.OutputWindow, MONITOR_DEFAULTTONEAREST), &mi) &&
+                     EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+    Log("summary: game frame %ux%u (window %ldx%ld), monitor %lux%lu @ %lu Hz", d.BufferDesc.Width, d.BufferDesc.Height,
+        cr.right - cr.left, cr.bottom - cr.top, mon ? dm.dmPelsWidth : 0ul, mon ? dm.dmPelsHeight : 0ul,
+        mon ? dm.dmDisplayFrequency : 0ul);
+    {
+        wchar_t p[MAX_PATH];
+        GetModuleFileNameW(nullptr, p, MAX_PATH);
+        if (wchar_t* s = wcsrchr(p, L'\\')) wcscpy_s(s + 1, MAX_PATH - (s + 1 - p), L"settings.ini");
+        std::string text;
+        FILE* f = nullptr;
+        if (!_wfopen_s(&f, p, L"rb") && f) {
+            char buf[16384] = {};
+            text.assign(buf, fread(buf, 1, sizeof(buf) - 1, f));
+            fclose(f);
+        }
+        std::string line;
+        for (const char* k : {"DisplayMode", "WindowWidth", "WindowHeight", "AspectRatio", "RenderScale", "DLSSQuality",
+                              "FSRQuality", "Preset", "Vsync", "MotionBlur", "HDR"})
+            line += std::string(" ") + k + "=" + (text.empty() ? "?" : IniValue(text, k));
+        Log("summary: game settings.ini%s", text.empty() ? " (not readable)" : line.c_str());
+    }
+    {
+        const float w = config::GetFloat("screen_width", 3.4f), dist = config::GetFloat("screen_dist", 2.2f);
+        const float aspect = d.BufferDesc.Width ? (float)d.BufferDesc.Height / (float)d.BufferDesc.Width : 0.5625f;
+        const float aW = Deg(2.f * atanf(0.5f * w / dist)), aH = Deg(2.f * atanf(0.5f * w * aspect / dist));
+        Log("summary: flat screen %.2f m wide at %.2f m = %.0f x %.0f deg (%.0f%% x %.0f%% of the eye's view), screen_px %.0f",
+            w, dist, aW, aH, fovW > 0.f ? 100.f * aW / fovW : 0.f, fovH > 0.f ? 100.f * aH / fovH : 0.f,
+            config::GetFloat("screen_px", 2560.f));
+    }
+    Log("summary: HUD ui_scale %.2f (third person), ui_scale_fp %.2f (first person), sharp_ui %.0f",
+        config::GetFloat("ui_scale", 0.35f), config::GetFloat("ui_scale_fp", 0.5f), config::GetFloat("sharp_ui", 1.f));
+    Log("summary: controllers left=%s right=%s", in.profile[0][0] ? in.profile[0] : "(none yet)",
+        in.profile[1][0] ? in.profile[1] : "(none yet)");
+    char hl[96], hr[96];
+    AimFromGrip(in.hand[0], hl, sizeof(hl));
+    AimFromGrip(in.hand[1], hr, sizeof(hr));
+    Log("summary: aim pose vs grip pose (deg): left %s; right %s", hl, hr);
+    Log("summary: hand offsets in gowvr.ini (pitch / yaw / roll deg): psvr2 %.0f / %.0f / %.0f, quest %.0f / %.0f / %.0f, "
+        "other %.0f / %.0f / %.0f (the 'arms: headset' line says which set is used)",
+        config::GetFloat("wristpitch_psvr2", 35.f), config::GetFloat("wristyaw_psvr2", 0.f),
+        config::GetFloat("wristroll_psvr2", 0.f), config::GetFloat("wristpitch_quest", 0.f),
+        config::GetFloat("wristyaw_quest", 0.f), config::GetFloat("wristroll_quest", 0.f),
+        config::GetFloat("wristpitch_other", 0.f), config::GetFloat("wristyaw_other", 0.f),
+        config::GetFloat("wristroll_other", 0.f));
+    Log("summary: pad_mode %.0f, autovr %.0f, dlss_per_eye %.0f, hit_radius %.2f, hit_radius_fist %.2f",
+        config::GetFloat("pad_mode", 0.f), config::GetFloat("autovr", 1.f), config::GetFloat("dlss_per_eye", 1.f),
+        config::GetFloat("hit_radius", 1.0f), config::GetFloat("hit_radius_fist", 0.5f));
+    Log("==== end of VR summary #%d ====", number);
+    (void)sc;
+}
+
+void MaybeLogSummary(IDXGISwapChain* sc, bool stereo) {
+    static int logged = 0;
+    static std::vector<std::string> seen;
+    if (logged >= 16 || !g_viewsValid) return;  // (the field of view is known once the views are located)
+    DXGI_SWAP_CHAIN_DESC d{};
+    if (FAILED(sc->GetDesc(&d))) return;
+    AcquireSRWLockShared(&g_inputLock);
+    const InputSnapshot in = g_input;
+    ReleaseSRWLockShared(&g_inputLock);
+    char key[256];
+    sprintf_s(key, "%d %ux%u %s %s", stereo ? 1 : 0, d.BufferDesc.Width, d.BufferDesc.Height, in.profile[0], in.profile[1]);
+    for (const auto& k : seen)
+        if (k == key) return;
+    seen.push_back(key);
+    LogSummary(sc, d, in, stereo, ++logged);
 }
 
 void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* eye0, ID3D11Texture2D* eye1,
@@ -1233,6 +1386,7 @@ void XrOnPresent(IDXGISwapChain* sc, ID3D11Texture2D* eye0, ID3D11Texture2D* eye
     c0->Release();
     if (g_frameBegun) EndFrame(ctx, sc, eye0, eye1, used);
     ctx->Release();
+    MaybeLogSummary(sc, eye0 && eye1);
     BeginFrame();
     RumbleTick();  // D-111
 }

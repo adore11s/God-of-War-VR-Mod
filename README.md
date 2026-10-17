@@ -41,7 +41,7 @@ Start the game normally once and, in its graphics settings:
 - turn the **frame rate limit** off,
 - set **Motion blur** to **0**,
 - turn **DLSS** off (it makes edges shimmer in VR),
-- set the **resolution** to **2K (2560 × 1440) or higher** for a good picture in the headset.
+- set the **resolution** to **2K (2560 × 1440) or higher** for a good picture in the headset (monitor smaller than that? see *blurry picture* in [GUIDE.md](GUIDE.md#troubleshooting)).
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
 

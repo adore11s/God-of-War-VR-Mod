@@ -150,6 +150,25 @@ Nothing in the game is replaced or patched on disk.
 - Is SteamVR running and the headset tracking? VR turns on as soon as the game starts; if it did not, press **F9**.
 - Open `gowvr_logs\gowvr.log` in the game folder: `xr: setup failed` means SteamVR did not answer. The mod keeps trying every 3 seconds.
 
+**Playing with Virtual Desktop (VDXR), Meta / Oculus or another OpenXR runtime instead of SteamVR**
+- The mod uses the active OpenXR runtime, and the launcher only starts SteamVR when SteamVR is that runtime.
+- Virtual Desktop: in the Streamer app set the OpenXR runtime to **VDXR**, connect the headset, then start the game.
+- To use a runtime for this game only, without changing your PC's default: set the `XR_RUNTIME_JSON` environment variable to that runtime's `.json` file.
+
+**The picture in the headset is blurry or low resolution**
+- The headset picture is made from the game's resolution. In Windowed mode the game can't go above your monitor's resolution.
+- Monitor below 2K (2560 × 1440)? Turn on **NVIDIA DSR** (NVIDIA Control Panel → Manage 3D settings → DSR - Factors) or **AMD Virtual Super Resolution** (AMD Software → Display). Then pick the higher resolution in the game.
+- Virtual Desktop: also raise its **VR Graphics Quality** (e.g. Ultra or Godlike).
+
+**Menus, videos or the HUD look too big**
+Edit `gowvr.ini` next to `GoW.exe`, then restart the game:
+- `screen_width` - width of the floating screen for menus and videos, in metres (default 3.4; try 2.4).
+- `screen_dist` - how far away that screen is, in metres (default 2.2; further away looks smaller).
+- `ui_scale` / `ui_scale_fp` - size of the HUD and captions in third / first person (defaults 0.35 / 0.5).
+
+**Kratos' hands don't match your controllers (tilted, turned or twisted)**
+In first person press **F5 / F6** to tilt the hands down / up, **Ctrl + F5 / F6** to turn them and **Shift + F5 / F6** to roll (twist) them. The values are saved in `gowvr.ini` for your headset type.
+
 **SteamVR restarted or crashed while playing**
 The mod tries to reconnect once SteamVR is back. If it does not, press **F9** twice or restart the game.
 

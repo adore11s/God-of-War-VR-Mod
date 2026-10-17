@@ -233,7 +233,23 @@ function Start-Game([string]$game) {
     Start-Process -FilePath (Join-Path $game 'GoW.exe') -WorkingDirectory $game
 }
 
+# The OpenXR runtime the mod will use: XR_RUNTIME_JSON if set, else the system's active runtime (as the mod reads it)
+function Get-ActiveXrRuntime {
+    if ($env:XR_RUNTIME_JSON) { return $env:XR_RUNTIME_JSON }
+    try {
+        return (Get-ItemProperty -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Khronos\OpenXR\1' -Name 'ActiveRuntime' -ErrorAction Stop).ActiveRuntime
+    } catch { return $null }
+}
+
 function Start-SteamVRIfNeeded {
+    # SteamVR only when it is the active OpenXR runtime: Virtual Desktop (VDXR), Oculus / Meta, WMR and other
+    # runtimes run without it
+    $rt = Get-ActiveXrRuntime
+    if ($rt -and $rt -notmatch 'steamvr|steamxr') {
+        Say "OpenXR runtime: $rt"
+        Say 'SteamVR is not needed for it - make sure that runtime is running and your headset is connected.'
+        return
+    }
     if (Get-Process -Name 'vrserver' -ErrorAction SilentlyContinue) { Say 'SteamVR is running'; return }
     if (Test-Path -LiteralPath 'Registry::HKEY_CLASSES_ROOT\steam') {
         Say 'Starting SteamVR...'
