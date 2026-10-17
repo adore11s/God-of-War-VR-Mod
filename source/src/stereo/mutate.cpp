@@ -139,6 +139,12 @@ struct CamSync {
     float prevErr = 0.f, prevErrY = 0.f, spin = 0.f, stuck = 0.f, badY = 0.f;
     double pauseUntil = 0.0, lastT = 0.0;
     uint64_t trips = 0;
+    // snap turning: how far the game camera still has to turn to face the view again (radians, the view yaw's sense) -
+    // a snap turns only the view (owner: "after two 90 deg snaps the axe throw goes 45 - 90 deg off": throws follow the
+    // game camera, which was up to 180 deg behind - and at 180 deg the aim steering could not tell left from right)
+    float alignLeft = 0.f, alignStuck = 0.f;
+    double alignSince = 0.0;
+    uint64_t aligns = 0;
 };
 CamSync g_cs;
 std::atomic<bool> g_camSyncOn{false};                 // steering outside aiming (gowvr.ini camsync)
@@ -199,6 +205,9 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
         const float dy = (g_cs.sign != 0.f ? g_cs.sign : -1.f) * (float)n * input::SnapStepRad();
         g_cs.renderYaw = WrapPi(g_cs.renderYaw + dy);
         fp::BodySnapYaw(dy);
+        g_cs.alignLeft += dy;  // the game camera follows in the background (below)
+        g_cs.alignSince = now;
+        g_cs.alignStuck = 0.f;
         static int snapLogs = 0;
         if (snapLogs++ < 5) Log("turning: snap %+d x %.0f deg (view and body turned %.0f deg)", n, input::SnapStepRad() * 57.2958f, dy * 57.2958f);
     }
@@ -234,8 +243,32 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
         input::SetCameraSyncStick(0.f, 0.f);
         return g_cs.renderYaw;
     }
+    // the snap's camera catch-up: what the camera turned this frame comes off; done when it got there, after 3 s, or
+    // when the camera does not answer (lock-on, a scripted camera: steering there would switch lock-on targets)
+    const float csSign = g_cs.sign != 0.f ? g_cs.sign : -1.f;
+    if (g_cs.alignLeft != 0.f) {
+        const float before = g_cs.alignLeft;
+        g_cs.alignLeft -= d;
+        const float camRateA = fabsf(d) / dt * 57.2958f;
+        g_cs.alignStuck = camRateA < 5.f ? g_cs.alignStuck + dt : 0.f;
+        if (before * g_cs.alignLeft <= 0.f || fabsf(g_cs.alignLeft) < 0.03f || now - g_cs.alignSince > 3.0 ||
+            g_cs.alignStuck > 0.3f) {
+            if (++g_cs.aligns <= 5 || g_cs.aligns % 50 == 0)
+                Log("camsync: snap catch-up %s (%.0f deg left, %llu)",
+                    g_cs.alignStuck > 0.3f ? "stopped - the camera does not answer" : "done", g_cs.alignLeft * 57.2958f,
+                    (unsigned long long)g_cs.aligns);
+            g_cs.alignLeft = 0.f;
+        }
+    }
+    if (g_cs.alignLeft != 0.f && !aiming && now >= g_cs.pauseUntil) {
+        g_cs.prevErr = WrapPi(g_cs.renderYaw + hmdYaw - camYaw) * 57.2958f;
+        input::SetCameraSyncStick(StickFor(g_cs.alignLeft * 57.2958f, csSign), 0.f);
+        return g_cs.renderYaw;
+    }
     const bool steerYaw = aiming || g_camSyncOn.load();
-    const float err = WrapPi(g_cs.renderYaw + hmdYaw - camYaw) * 57.2958f;  // head's world yaw vs the game camera
+    float err = WrapPi(g_cs.renderYaw + hmdYaw - camYaw) * 57.2958f;  // head's world yaw vs the game camera
+    // a snap's catch-up still running: the far side of 180 deg is the way the snap went, not the shorter-looking one
+    if (g_cs.alignLeft != 0.f && fabsf(err) > 90.f && err * g_cs.alignLeft < 0.f) err += g_cs.alignLeft > 0.f ? 360.f : -360.f;
     const float errY = (hmdPitch - camPitch) * 57.2958f;                   // head pitch vs the game camera's
     if (!steerYaw || now < g_cs.pauseUntil) {
         g_cs.spin = g_cs.stuck = g_cs.badY = 0.f;
