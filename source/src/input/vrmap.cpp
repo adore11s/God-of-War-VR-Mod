@@ -245,8 +245,14 @@ bool FistHand(const vr::HandState& H) {
     // 0.40-0.52 (often just under 0.42), off the grip 0.00-0.02 -> 0.25 (the trigger-only coupling stays ~0.21)
     static const float curl = config::GetFloat("fist_curl", 0.25f);
     if (!H.active) return false;
+    // A Quest 3 tester (Virtual Desktop): "the fist hits don't register" - Meta's controllers have no finger sensing on
+    // the grip (the log: "no finger data", curls 0), so fingers resting there were never seen and a fist needed the grip
+    // pressed past fist_squeeze (0.85) - nearly the left shield's squeeze. Without finger data a light squeeze
+    // (fist_squeeze_nofingers, 0.25) is the fist; the left shield still needs the firm grip (g_gripHeld, past 0.55, held)
+    static const float lightSqueeze = config::GetFloat("fist_squeeze_nofingers", 0.25f);
+    if (!H.fingersValid) return H.squeeze >= lightSqueeze;
     const float three = (H.fingerCurl[2] + H.fingerCurl[3] + H.fingerCurl[4]) / 3.f;
-    return H.squeeze >= FistSqueeze() || (H.fingersValid && three >= curl);
+    return H.squeeze >= FistSqueeze() || three >= curl;
 }
 bool LeftShieldActive(const vr::HandState& L, ULONGLONG now, Mode mode) {
     if (!g_gripHeld[0] || OverShoulder(L)) return false;

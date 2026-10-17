@@ -17,7 +17,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
 - **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
 - **Equipping the axe:** reach over your **right shoulder** and press the **grip button**. After throwing the axe, recall it with the **right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
-- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield.
+- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the grips **lightly** for fists, and fully for the shield.
 
 ## What the mod does
 
