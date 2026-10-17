@@ -300,6 +300,8 @@ void HeadCameraIntoViewA(uint8_t* view);
 // 3D points (prompts, enemy bars) move toward the centre by the same factor.
 constexpr uint64_t kViewCPtrVa = 0x142d4e5e8, kViewDPtrVa = 0x142d4e5f0;
 constexpr uint64_t kInPauseMenuVa = 0x1422e795b;  // byte set by the Lua binding inPauseMenu (0x140906a40)
+constexpr uint64_t kVideoHandleVa = 0x142d4df18;   // the Bink player's open video (BinkOpen result, 0 = none)
+constexpr uint64_t kVideoClosingVa = 0x142d1b5d4;  // its closing-frame count (0 while it plays)
 float g_uiScale = -1.f;
 int g_screen2DMode = -1;
 std::atomic<bool> g_screen2D{false};
@@ -308,7 +310,7 @@ uint64_t g_uiScaled = 0, g_uiUpdates = 0;
 // VR check (log): why a UI view update was not scaled here, and the flat screen's signals (UiDiagText). On another
 // game build a view laid out differently would show up as "not orthographic" / never marked instead of scaled.
 uint64_t g_uiSkipCam = 0, g_uiSkipPersp = 0, g_uiSharp = 0;
-bool g_lastPause = false, g_lastLoading = false, g_lastFaded = false;
+bool g_lastPause = false, g_lastLoading = false, g_lastFaded = false, g_lastVideo = false;
 float g_lastFadeA = 0.f;
 
 // D-102 (owner: "make the aiming icon bigger in F3 and F1 mode"): the UI is one layer (D-101), so in the first-person
@@ -487,10 +489,18 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
         static const bool fadeOn = config::GetFloat("screen_2d_fades", 1.f) > 0.5f;
         const bool faded = fadeOn && fadeCover && fadePosed < 1200;
         const bool pause = *At<uint8_t>(kInPauseMenuVa) != 0;
-        g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA;
-        const bool on = g_headCamOn && (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded)));
+        // a full-screen video (owner + a tester: the PlayStation Studios logo at startup was stretched over the whole
+        // view): the game's one Bink player (video_bink: BinkOpen -> 0x142d4df18, cleared after its 3 closing frames
+        // counted in 0x142d1b5d4). The title scene behind the logo already poses Kratos, so the loading rule switched
+        // to stereo. "Playing" as the game itself tests it: handle set and not closing. (The other videos are the skill
+        // previews in the menus - a 2D screen anyway.)
+        const bool video = *At<uint64_t>(kVideoHandleVa) != 0 && *At<int32_t>(kVideoClosingVa) == 0;
+        g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA; g_lastVideo = video;
+        const bool on = g_headCamOn &&
+                        (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded || video)));
         if (on != g_screen2D.load())
             Log("ui: %s", on ? (pause ? "2D screen (pause menu): flat game camera, one kick"
+                                      : video ? "2D screen (video playing): flat game camera, one kick"
                                       : loading ? "2D screen (loading: Kratos not posed): flat game camera, one kick"
                                       : faded ? "2D screen (screen faded out): flat game camera, one kick"
                                                 : "2D screen (forced)")
@@ -1029,12 +1039,12 @@ bool HeadCameraForUi(Mat4* camToWorld, float* tanX, float* tanY) {
 void UiDiagText(char* out, size_t n) {
     sprintf_s(out, n,
               "UI view updates %llu: scaled %llu, by the sharp HUD %llu, skipped (head camera off / 2D screen) %llu, "
-              "skipped (not orthographic) %llu | 2D screen %s (mode %d; pause menu %d, loading %d, faded %d alpha %.2f; "
-              "head camera %d)",
+              "skipped (not orthographic) %llu | 2D screen %s (mode %d; pause menu %d, video %d, loading %d, faded %d "
+              "alpha %.2f; head camera %d)",
               (unsigned long long)g_uiUpdates, (unsigned long long)g_uiScaled, (unsigned long long)g_uiSharp,
               (unsigned long long)g_uiSkipCam, (unsigned long long)g_uiSkipPersp, g_screen2D.load() ? "ON" : "off",
-              g_screen2DMode, g_lastPause ? 1 : 0, g_lastLoading ? 1 : 0, g_lastFaded ? 1 : 0, g_lastFadeA,
-              g_headCamOn ? 1 : 0);
+              g_screen2DMode, g_lastPause ? 1 : 0, g_lastVideo ? 1 : 0, g_lastLoading ? 1 : 0, g_lastFaded ? 1 : 0,
+              g_lastFadeA, g_headCamOn ? 1 : 0);
 }
 
 float UiScaleCurrent() {

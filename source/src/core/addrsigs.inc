@@ -143,8 +143,10 @@
 {0x142590b00ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 4c 63 c9 49 8b f0"},  // src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x1427a2c48ull, 1, 3, 7, 0, "0f b1 05 ?? ?? ?? ?? 75 ?? 45 33 c9"},  // src\stereo\r1.cpp
 {0x142d19024ull, 1, 2, 6, 0, "63 05 ?? ?? ?? ?? 41 b8 01 00 00 00"},  // src\stereo\eyes.cpp, src\stereo\r1.cpp
+{0x142d1b5d4ull, 1, 2, 6, 0, "8b 35 ?? ?? ?? ?? 41 bd 01 00 00 00"},  // src\stereo\mutate.cpp
 {0x142d24d04ull, 1, 2, 6, 0, "89 1d ?? ?? ?? ?? 48 83 c4 30 5b c3"},  // src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x142d27a8cull, 1, 2, 6, 0, "8b 15 ?? ?? ?? ?? 41 ff c5 49 ff c4"},  // src\diag\crashlog.cpp
+{0x142d4df18ull, 1, 2, 6, 0, "39 3d ?? ?? ?? ?? 74 ?? 85 f6 75 ??"},  // src\stereo\mutate.cpp
 {0x142d4e298ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 48 8b 89 18 25 00 00"},  // src\diag\crashlog.cpp, src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x142d4e5d8ull, 1, 2, 6, 0, "8b 2d ?? ?? ?? ?? 44 0f b6 54 24 20"},  // src\diag\cbprobe.cpp, src\fp\body.cpp, src\stereo\mutate.cpp
 {0x142d4e5e0ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 4d 8b c8 4c 8b c2"},  // src\fp\body.cpp, src\stereo\mutate.cpp
