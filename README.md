@@ -49,7 +49,7 @@ Start the game normally once and, in its graphics settings:
 
 1. Open your God of War folder. In Steam: right-click the game → **Manage** → **Browse local files**. In the Epic Games Launcher: the game's **⋯** menu → **Manage** → the folder icon. In GOG Galaxy: the game's settings icon → **Manage installation** → **Show folder**.
 2. Copy this whole **`GOW_VR_MOD`** folder into it.
-3. Start **SteamVR** and put your headset on.
+3. Start **SteamVR** (or your own OpenXR runtime, such as Virtual Desktop with **VDXR**) and put your headset on.
 4. Double-click **`Play God of War in VR.cmd`** in the `GOW_VR_MOD` folder.
 
 VR turns on by itself as soon as the game starts. From then on you can also start the game straight from Steam, Epic or GOG; it stays in VR until you uninstall.
