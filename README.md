@@ -14,8 +14,8 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Your hands feel in the wrong place or don't move right?** Switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
 - **Don't use DLSS for now.** It makes every edge shimmer in the headset. Turn it off in the game's graphics settings.
-- **Opening the menus:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**) for the game menu. **Hold** them for the settings menu.
-- **VR settings:** in the settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
+- **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
+- **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
 - **Your monitor shows a small square window while VR runs.** That is on purpose: the headset still gets the full picture.
 - **Equipping the axe:** reach over your **right shoulder** and press the **grip button**. After throwing the axe, recall it with the **right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
 - **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield.
@@ -47,15 +47,15 @@ Start the game normally once and, in its graphics settings:
 - set **Motion blur** to **0**,
 - turn **DLSS** off (it makes edges shimmer in VR),
 - turn **HDR** off,
-- set the **resolution** to **2K (2560 × 1440) or higher** for sharp menus in the headset (the 3D picture's size is set in the VR settings panel).
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
 
 ## Install
 
 1. Open your God of War folder. In Steam: right-click the game → **Manage** → **Browse local files**. In the Epic Games Launcher: the game's **⋯** menu → **Manage** → the folder icon. In GOG Galaxy: the game's settings icon → **Manage installation** → **Show folder**.
-2. Copy **`version.dll`** into it, next to **`GoW.exe`** (it is in the release zip, or in `files` here). Copy the **`GOW_VR_MOD`** folder there too: it has the guide and the uninstaller.
-3. Put your headset on and start the game as usual, from Steam, Epic or GOG.
+2. Copy this whole **`GOW_VR_MOD`** folder into it.
+3. Double-click **`Install VR mod.cmd`** in the `GOW_VR_MOD` folder. You only do this **once** (and again after downloading a new version).
+4. From now on, put your headset on and start the game as usual, from Steam, Epic, GOG or `GoW.exe`.
 
 VR turns on by itself as soon as the game starts, and SteamVR starts with it. Using Virtual Desktop (**VDXR**) or another OpenXR runtime instead? Connect your headset to it first. The mod's settings file (`gowvr.ini`) is created by itself the first time.
 
@@ -66,15 +66,13 @@ VR turns on by itself as soon as the game starts, and SteamVR starts with it. Us
 | **Right trigger next to your head** | First person on / off |
 | **Hold the right trigger next to your head** | First person in cutscenes |
 | **All four face buttons** | Game menu |
-| **All four face buttons (hold)** | Game settings + VR settings |
-| **Point a controller + trigger** (settings menu) | Change the VR settings on the panel next to the menu |
 | **F9** | VR off / on (play on your monitor, press again to go back to VR) |
 
 ➡️ All controls, motion gestures, settings and fixes: **[GUIDE.md](GUIDE.md)**
 
 ## Uninstall
 
-Double-click **`Uninstall VR mod.cmd`** in the `GOW_VR_MOD` folder. It puts the game folder back as it was. **Your saves are never touched.**
+Double-click **`Uninstall VR mod.cmd`** in the `GOW_VR_MOD` folder. It moves the mod's own files to the **Recycle Bin** (nothing is deleted for good). **Your saves and the game's files are never touched.**
 
 ## Something went wrong?
 
@@ -84,20 +82,20 @@ Open an issue on the mod's GitHub page (**Issues** → **New issue**) with a few
 |---|---|
 | **The game crashed** | The newest **`crash_<date>.txt`** from **`gowvr_logs\crash_reports`** in your game folder |
 | **Something looks or works wrong, the game froze, or VR did not start** | **`gowvr_logs\gowvr.log`** from your game folder, right after quitting the game (if you have started the game again since, send **`gowvr.prev.log`** too) |
-| **The uninstaller window showed an error** | A screenshot of that window |
+| **The install or uninstall window showed an error** | A screenshot of that window |
+
+The mod writes these files itself while the game runs (`gowvr.log` is started fresh each time; the run before is kept as `gowvr.prev.log`).
 
 None of these files contain your user name or other personal information.
 
 ## Known bugs (fixes coming soon)
 
-- **Some of the interface is missing or looks low-resolution.** In first person you can't see the health and Spartan Rage bars, among other things.
+- **Some of the interface is missing in first person** (the health and Spartan Rage bars).
 - **The Leviathan Axe's frost icon when aiming and Atreus' aiming icon are broken.**
 - **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
 - **Phasing through walls during combat** (see *Important: read before playing*).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks, and the fists' hit area is too big: you can punch enemies from about 2 metres away.
 - **DLSS makes edges shimmer** (see *Important: read before playing*).
-- **You can't resize the game window.** The mod doesn't let you rescale it.
-
 ## Open source
 
 The mod is free and open source under the **MIT license**. The full source code is in the [`source`](source) folder.

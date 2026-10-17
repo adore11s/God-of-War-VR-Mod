@@ -83,6 +83,6 @@ that runs the mod's own resolver over a mapped GoW.exe (none of the game's code 
 1. Build Release.
 2. Copy `version.dll` into `files\`.
 3. Update `files\BUILD.txt`.
-4. Test on a clean game folder: `version.dll` next to `GoW.exe`, start the game, then `Uninstall VR mod.cmd`.
-5. The release zip holds `version.dll` at its top level (so it lands next to `GoW.exe` when unpacked into the game
-   folder) and this `GOW_VR_MOD` folder.
+4. Test on a clean game folder: `Install VR mod.cmd`, start the game, then `Uninstall VR mod.cmd` (it only moves the
+   mod's own files to the Recycle Bin - never an .exe, a folder holding one, or the game folder).
+5. The release zip holds this `GOW_VR_MOD` folder.

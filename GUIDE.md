@@ -41,7 +41,6 @@ Set these in the game's graphics settings before you play:
 | DLSS (NVIDIA cards) | Off for now | It makes every edge shimmer in the headset |
 | Graphics preset | **Low**, or **Original** if your PC can handle it | VR draws the game twice, once per eye |
 | HDR | Off | The headset picture is made from the normal (SDR) picture |
-| Resolution | **2K (2560 × 1440) or higher** | The menu screen in the headset uses it (the 3D picture's size is the VR picture size, see below) |
 
 Also recommended:
 
@@ -50,7 +49,7 @@ Also recommended:
 | Film grain | 0 (it reads as noise in a headset) |
 | Display mode | Windowed or Borderless (both fine) |
 
-**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (settings menu: hold the four face buttons) or as `render_size` in `gowvr.ini`. Bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
+**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. Bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
 
 ---
 
@@ -85,7 +84,7 @@ These work while the game window or a SteamVR window is in front.
 | Both stick clicks together | Spartan Rage |
 | Right trigger **next to your head** | First person on / off; **hold** it there for first person in cutscenes |
 
-**Menus:** press all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for the game menu (map, skills, inventory); **hold** them for the settings menu, where the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
+**Menus:** press all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for the game menu (map, skills, inventory). In the game's settings menu the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
 
 ### First person: motion controls
 
@@ -160,7 +159,6 @@ Nothing in the game is replaced or patched on disk.
 
 **The picture in the headset is blurry or low resolution**
 - Raise the **VR picture size** in the VR settings panel (settings menu), for example to 2560 or 2816.
-- Blurry menus only? The menu screen uses the game's own resolution: set it to 2K or higher. Monitor smaller than that? Turn on **NVIDIA DSR** (NVIDIA Control Panel → Manage 3D settings → DSR - Factors) or **AMD Virtual Super Resolution** (AMD Software → Display), then pick the higher resolution in the game.
 - Virtual Desktop: also raise its **VR Graphics Quality** (e.g. Ultra or Godlike).
 
 **Menus, videos or the HUD look too big**
