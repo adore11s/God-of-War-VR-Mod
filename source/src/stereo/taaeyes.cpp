@@ -58,6 +58,13 @@ int g_nOuts = 0;
 ID3D11Texture2D* g_priv[2][kSlots] = {};  // each eye's last TAA output per slot
 D3D11_TEXTURE2D_DESC g_privDesc[2][kSlots] = {};
 uint64_t g_dispatches = 0, g_restored = 0, g_saved = 0, g_noMatch = 0;
+// Owner: "a black frame of the intro cutscene in 3D space when I get into 3D after the startup intros": while the flat
+// 2D screen shows only eye 0 renders, so eye 1's history stayed the dark intro from VR's start (2304 x 2304) - and
+// back in 3D at that size it was restored into eye 1's TAA. A history is only used when it is the last frame's (saved
+// within 200 ms), and the switch from the flat screen to stereo drops them all (TaaEyesReset).
+ULONGLONG g_privAt[2][kSlots] = {};
+std::atomic<bool> g_resetReq{false};
+uint64_t g_stale = 0;
 
 template <class T> T Rd(uint64_t va) { return *(T*)((uint8_t*)GameVa(va)); }
 
@@ -144,6 +151,11 @@ void STDMETHODCALLTYPE site_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UIN
     }
     if (!IsTaa(c)) { orig(c, x, y, z); return; }
     ++g_dispatches;
+    const ULONGLONG now = GetTickCount64();
+    if (g_resetReq.exchange(false)) {
+        memset(g_privAt, 0, sizeof(g_privAt));
+        Log("taaeyes: per-eye histories dropped (the flat screen handed back to stereo)");
+    }
     // before: this eye's own history into every bound input that is a TAA output
     ID3D11ShaderResourceView* srv[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
     c->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, srv);
@@ -156,7 +168,10 @@ void STDMETHODCALLTYPE site_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UIN
         if (os >= 0) {
             matched = true;
             D3D11_TEXTURE2D_DESC d;
-            if (g_priv[eye][os] && AsTex(r, &d) && SameDesc(d, g_privDesc[eye][os])) {
+            const bool fresh = now - g_privAt[eye][os] < 200;
+            if (!fresh && g_priv[eye][os] && ++g_stale <= 10)
+                Log("taaeyes: eye %d history (slot %d) is old - not used", eye, os);
+            if (fresh && g_priv[eye][os] && AsTex(r, &d) && SameDesc(d, g_privDesc[eye][os])) {
                 if (!copied) {  // the inputs unbound around the copy (no read / write hazard), then bound again
                     ID3D11ShaderResourceView* none[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
                     c->CSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, none);
@@ -206,6 +221,7 @@ void STDMETHODCALLTYPE site_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UIN
             }
             if (priv) {
                 c->CopyResource(priv, r);
+                g_privAt[eye][s] = now;
                 ++g_saved;
             }
         }
@@ -228,6 +244,8 @@ void TaaEyesInstall() {
     TaaEyesEnable(config::GetFloat("taa_per_eye", 0.f) > 0.5f);  // D-189: off by default (owner: "everything moves like shifting")
     if (!DetourCallSite(kDispatchSite, (void*)&site_Dispatch)) Log("taaeyes: Dispatch site not hooked - TAA history shared");
 }
+
+void TaaEyesReset() { g_resetReq = true; }
 
 void TaaEyesEnable(bool on) {
     g_on = on;

@@ -1369,13 +1369,17 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     }
     static const bool screenOnHold = config::GetFloat("screen_2d", 1.f) > 0.5f;
     if (HoldSwitchFrame(bb ? bb : eye0, bb != nullptr && screenOnHold)) {
+        stereo::SharpUiHudDiscard();  // this frame's HUD is not shown either
         if (bb) bb->Release();
         return;
     }
     static const bool screenOn = config::GetFloat("screen_2d", 1.f) > 0.5f;
     if (bb && screenOn) {
+        stereo::SharpUiHudDiscard();  // a flat screen frame: no HUD layer may wait for the next stereo frame
         ++g_monoRun;
-        const bool lone = g_monoRun < 3 && g_haveLastPv;
+        // (only right after the stereo view: after a while on the flat screen the last stereo image is old - the
+        // startup intro's first frame came back that way)
+        const bool lone = g_monoRun < 3 && g_haveLastPv && g_lastKind == kLastProjection;
         if (g_frame.shouldRender && g_viewsValid && lone) {  // repeat the last stereo layer (its last released images)
             XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, g_space, 2, g_lastPv};
             const XrBaseHeader* layers[] = {(const XrBaseHeader*)&layer};

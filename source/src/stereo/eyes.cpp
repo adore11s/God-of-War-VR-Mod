@@ -82,6 +82,12 @@ DXGI_FORMAT g_shotFmt = DXGI_FORMAT_UNKNOWN;
 
 void Submit(uint8_t* ctx) { ((PFN_Submit)((uint8_t*)GameVa(0x1409a09c0ull)))(ctx); }
 
+// Owner: "a one-frame flash of the startup intro when I get into 3D": eye 0 is copied mid-frame, eye 1 at Present - a
+// resize in between made both textures again at eye 1, so eye 0 went out as a new, never written texture (whatever
+// that video memory held: the intro from VR's start, same size). A pair goes out only when both eyes were copied into
+// the textures that exist now.
+uint64_t g_eyeGen = 0, g_capGen[2] = {~0ull, ~0ull};
+
 bool EnsureEyeTex(ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& bd) {
     if (g_eyeTex[0] && g_eyeDesc.Width == bd.Width && g_eyeDesc.Height == bd.Height && g_eyeDesc.Format == bd.Format)
         return true;
@@ -97,6 +103,7 @@ bool EnsureEyeTex(ID3D11Device* dev, const D3D11_TEXTURE2D_DESC& bd) {
     for (auto& t : g_eyeTex)
         if (FAILED(dev->CreateTexture2D(&d, nullptr, &t))) { Log("eyes: eye texture creation failed"); return false; }
     g_eyeDesc = d;
+    ++g_eyeGen;
     Log("eyes: eye textures %ux%u fmt=%d", d.Width, d.Height, (int)d.Format);
     return true;
 }
@@ -114,7 +121,10 @@ bool CaptureEye(IDXGISwapChain* sc, int eye) {
     dev->GetImmediateContext(&ctx);
     bool ok = bd.SampleDesc.Count == 1 && EnsureEyeTex(dev, bd);
     SharpUiFinish(ctx, bb);  // D-104: this eye's HUD pasted in before the copy
-    if (ok) ctx->CopyResource(g_eyeTex[eye], bb);
+    if (ok) {
+        ctx->CopyResource(g_eyeTex[eye], bb);
+        g_capGen[eye & 1] = g_eyeGen;
+    }
     ctx->Release();
     dev->Release();
     bb->Release();
@@ -270,6 +280,11 @@ void EyesSetFrameViews(const vr::EyeViews& v) { g_frameViews = v; }
 
 bool EyesPair(ID3D11Texture2D** eye0, ID3D11Texture2D** eye1, vr::EyeViews* views) {
     if (!g_pairThisFrame || !g_eyeTex[0] || !g_eyeTex[1]) return false;
+    if (g_capGen[0] != g_eyeGen || g_capGen[1] != g_eyeGen) {  // an eye copied into textures made again since
+        static int logs = 0;
+        if (logs++ < 10) Log("eyes: pair skipped - the eye textures were made again between the two eyes' copies");
+        return false;
+    }
     *eye0 = g_eyeTex[0];
     *eye1 = g_eyeTex[1];
     *views = g_pairViews;

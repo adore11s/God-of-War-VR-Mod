@@ -14,6 +14,10 @@ bool SharpUiMarkView(uint8_t* view);
 // HUD texture (premultiplied, gamma-encoded, with mips) and its size as a share of the eye frustum (x, y). False = no
 // HUD layer this frame for that eye (no HUD drawn, the HUD pasted into the eye image, hud_layer=0).
 bool SharpUiHudLayer(int eye, ID3D11ShaderResourceView** srv, uint32_t* w, uint32_t* h, float* sx, float* sy);
+// A frame shown without the stereo view (the flat screen, a held frame): its HUD is dropped - left waiting, the startup
+// intro (a video drawn through the UI) came back for one frame when the stereo view returned (owner: "a one-frame
+// flash of the intro when I get into 3D")
+void SharpUiHudDiscard();
 // VR check line (log): the sharp HUD's state and counters
 void SharpUiDiagText(char* out, size_t n);
 // Render thread, right before an eye image is copied from the backbuffer and at Present: paste this eye's HUD

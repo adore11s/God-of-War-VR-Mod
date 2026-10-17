@@ -7,5 +7,6 @@ namespace gowvr::stereo {
 
 void TaaEyesInstall();          // after the device exists (d3d_hooks.cpp, next to SharpUiInstall)
 void TaaEyesEnable(bool on);    // gowvr.ini taa_per_eye (default on)
+void TaaEyesReset();            // any thread: both eyes' histories are old (the flat screen handed back to stereo)
 
 }  // namespace gowvr::stereo

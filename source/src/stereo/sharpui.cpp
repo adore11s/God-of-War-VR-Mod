@@ -313,6 +313,19 @@ bool EnsureUiTarget() {
     }
     g_uiW = bd.Width;
     g_uiH = bd.Height;
+    // a new texture holds whatever that video memory held before (owner: "a one-frame flash of the startup intro when
+    // I get into 3D" - the HUD target made again at the square size after the intro showed the old one of that size,
+    // from VR's start, when the intro video was drawn through the UI): cleared before its first use
+    g_needClear = true;
+    {
+        ID3D11DeviceContext* ctx = nullptr;
+        g_dev->GetImmediateContext(&ctx);
+        if (ctx) {
+            static const FLOAT clear[4] = {0, 0, 0, 0};
+            ctx->ClearRenderTargetView(g_uiRtv, clear);
+            ctx->Release();
+        }
+    }
     Log("sharpui: HUD target %ux%u RGBA16F with mips", g_uiW, g_uiH);
     return true;
 }
@@ -1186,6 +1199,8 @@ void SharpUiDiagText(char* out, size_t n) {
               (unsigned long long)g_substitutions.load(), (unsigned long long)g_substFrames.load(),
               UiVerticalFix(g_uiH ? (float)g_uiW / (float)g_uiH : 0.f));
 }
+
+void SharpUiHudDiscard() { g_hudReady[0] = g_hudReady[1] = false; }
 
 bool SharpUiHudLayer(int eye, ID3D11ShaderResourceView** srv, uint32_t* w, uint32_t* h, float* sx, float* sy) {
     eye &= 1;

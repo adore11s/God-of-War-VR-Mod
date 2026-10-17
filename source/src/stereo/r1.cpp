@@ -9,6 +9,7 @@
 #include "eyes.h"
 #include "headcam.h"
 #include "mutate.h"
+#include "taaeyes.h"
 #include "../fp/body.h"
 #include <windows.h>
 #include <atomic>
@@ -465,7 +466,10 @@ void __fastcall hk_Kick() {
     // the per-eye histories are stale afterwards
     const bool flat2D = g_vr.load() && Screen2DFrame();
     static bool wasFlat2D = false;
-    if (wasFlat2D && !flat2D) ResetEyeHistory();
+    if (wasFlat2D && !flat2D) {
+        ResetEyeHistory();
+        TaaEyesReset();  // the TAA histories too (eye 1's was the startup intro)
+    }
     wasFlat2D = flat2D;
     if (flat2D) {
         fp::BodyHideDrawBegin();
