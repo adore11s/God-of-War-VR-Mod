@@ -6,6 +6,7 @@
 #include "config.h"
 #include <windows.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -30,6 +31,7 @@ struct Parsed {
 };
 
 bool g_known = false, g_usable = false;
+char g_buildText[192] = "not checked yet";  // the outcome in one line (VR summary in the log)
 uintptr_t g_base = 0;
 uintptr_t g_resolved[kN] = {};
 Parsed g_parsed[kN];
@@ -133,6 +135,9 @@ void Scan() {
     g_usable = missing == 0 && ambiguous == 0;
     Log("addr: %zu addresses - %d at their recorded place, %d moved, %d missing, %d ambiguous -> %s", kN, same, moved,
         missing, ambiguous, g_usable ? "all found, the mod runs" : "NOT all found, the mod stays off (flat game untouched)");
+    sprintf_s(g_buildText, "%s: %zu addresses - %d at their recorded place, %d moved, %d missing, %d ambiguous",
+              g_known ? "recorded Steam build, signature scan forced" : "UNVERIFIED build, found by signature", kN, same,
+              moved, missing, ambiguous);
 }
 
 int Find(uint64_t va) {
@@ -153,11 +158,13 @@ void AddrInit(bool knownBuild) {
     if (knownBuild && !force) {
         g_usable = true;
         Log("addr: GAME BUILD VERIFIED (the recorded Steam build) - %zu recorded addresses used as they are", kN);
+        sprintf_s(g_buildText, "VERIFIED (the recorded Steam build of 2022-05-25)");
         return;
     }
     if (!knownBuild && config::GetFloat("verified_build_only", 0.f) > 0.5f) {
         g_usable = false;
         Log("addr: UNVERIFIED build and gowvr.ini verified_build_only=1 - the mod stays off");
+        sprintf_s(g_buildText, "UNVERIFIED build, verified_build_only=1 - mod off");
         return;
     }
     const ULONGLONG t0 = GetTickCount64();
@@ -183,6 +190,7 @@ int AddrSelfTest(uintptr_t imageBase) {
 
 bool AddrUsable() { return g_usable; }
 bool AddrKnownBuild() { return g_known; }
+const char* AddrBuildText() { return g_buildText; }
 
 uintptr_t GameVa(uint64_t staticVa) {
     if (g_known) return g_base + (uintptr_t)(staticVa - 0x140000000ull);

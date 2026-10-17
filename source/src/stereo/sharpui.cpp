@@ -1116,6 +1116,17 @@ void SharpUiInstall(ID3D11DeviceContext* ctx) {
         g_enabled.load() ? "on" : "off");
 }
 
+void SharpUiDiagText(char* out, size_t n) {
+    sprintf_s(out, n,
+              "sharp HUD %s (executor hooks %s%s): UI views marked %llu, marked uploads seen %llu, UI draws redirected "
+              "%llu, HUD pastes %llu",
+              !g_installed.load() ? "not installed" : g_broken.load() ? "NOT WORKING (scaled UI instead)"
+                                                  : g_enabled.load() ? "on" : "off",
+              g_sitesOk ? "installed" : "INCOMPLETE", g_installed.load() ? "" : " - not yet",
+              (unsigned long long)g_markedFrames.load(), (unsigned long long)g_markSeen.load(),
+              (unsigned long long)g_substitutions.load(), (unsigned long long)g_substFrames.load());
+}
+
 bool SharpUiMarkView(uint8_t* view) {
     if (!g_enabled.load() || g_broken.load() || !g_installed.load()) return false;
     // the UI camera: camera->world translation (view +0x180) on the +z axis - LIVE 2026-10-04 (0, 0, 30); CAMERA_FINDINGS

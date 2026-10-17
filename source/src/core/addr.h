@@ -17,6 +17,8 @@ uintptr_t GameVa(uint64_t staticVa);
 // another build: may the hook guard at `target` differ from the recorded bytes at position i (a moving field)?
 bool AddrGuardMayDiffer(uint64_t staticVa, int i);
 bool AddrKnownBuild();
+// the build check's outcome in one line (VERIFIED / UNVERIFIED with the address counts) - for the log's VR summary
+const char* AddrBuildText();
 // tools/addrtest only: the signature scan over a mapped GoW.exe image; differences from the recorded addresses (-1 = not all found)
 int AddrSelfTest(uintptr_t imageBase);
 

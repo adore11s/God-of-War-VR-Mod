@@ -5,6 +5,9 @@
 #include "../core/config.h"
 #include "../diag/shot.h"
 #include "../stereo/headcam.h"
+#include "../core/addr.h"
+#include "../stereo/mutate.h"
+#include "../stereo/sharpui.h"
 #include <windows.h>
 #include <d3d11_1.h>
 #include <dxgi.h>
@@ -1055,6 +1058,12 @@ std::string IniValue(const std::string& text, const char* key) {
 void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSnapshot& in, bool stereo, int number) {
     Log("==== VR SUMMARY #%d (%s) ====", number, stereo ? "stereo game view" : "flat screen: menus / videos / loading");
     Log("summary: mod gowvr %s", GOWVR_VERSION);
+    {
+        const uint8_t* img = (const uint8_t*)GetModuleHandleW(nullptr);
+        const auto* nt = (const IMAGE_NT_HEADERS64*)(img + ((const IMAGE_DOS_HEADER*)img)->e_lfanew);
+        Log("summary: game GoW.exe stamp 0x%08lx size 0x%08lx - %s", nt->FileHeader.TimeDateStamp,
+            nt->OptionalHeader.SizeOfImage, AddrBuildText());
+    }
     Log("summary: runtime %s | %s", g_runtimeName[0] ? g_runtimeName : "?", g_runtimeJson);
     Log("summary: headset '%s'", g_systemName);
     Log("summary: eye image %ux%u per eye (the runtime allows up to %ux%u)", g_eye[0].w, g_eye[0].h, g_eyeMaxW, g_eyeMaxH);
@@ -1125,8 +1134,32 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
     Log("summary: pad_mode %.0f, autovr %.0f, dlss_per_eye %.0f, hit_radius %.2f, hit_radius_fist %.2f",
         config::GetFloat("pad_mode", 0.f), config::GetFloat("autovr", 1.f), config::GetFloat("dlss_per_eye", 1.f),
         config::GetFloat("hit_radius", 1.0f), config::GetFloat("hit_radius_fist", 0.5f));
+    {
+        char ui[512], hud[256];
+        stereo::UiDiagText(ui, sizeof(ui));
+        stereo::SharpUiDiagText(hud, sizeof(hud));
+        Log("summary: %s", ui);
+        Log("summary: %s", hud);
+    }
     Log("==== end of VR summary #%d ====", number);
     (void)sc;
+}
+
+// While VR runs: one "VR check" line a minute for the first 30 minutes, then every 10 minutes - whether the UI scaling
+// and the flat screen actually work on this player's game (a view the mod misreads shows up here, not as an error)
+void VrCheckTick() {
+    static ULONGLONG next = 0;
+    static int lines = 0;
+    const ULONGLONG now = GetTickCount64();
+    if (!next) { next = now + 20000; return; }  // first one 20 s in (menus / intro)
+    if (now < next) return;
+    next = now + (++lines < 30 ? 60000 : 600000);
+    char ui[512], hud[256];
+    stereo::UiDiagText(ui, sizeof(ui));
+    stereo::SharpUiDiagText(hud, sizeof(hud));
+    Log("VR check %d: frames to the headset %llu (flat screen %llu, flat backbuffer %llu) | %s | %s", lines,
+        (unsigned long long)g_submitted.load(), (unsigned long long)g_quadFrames.load(),
+        (unsigned long long)g_mono.load(), ui, hud);
 }
 
 void MaybeLogSummary(IDXGISwapChain* sc, bool stereo) {
@@ -1387,6 +1420,7 @@ void XrOnPresent(IDXGISwapChain* sc, ID3D11Texture2D* eye0, ID3D11Texture2D* eye
     if (g_frameBegun) EndFrame(ctx, sc, eye0, eye1, used);
     ctx->Release();
     MaybeLogSummary(sc, eye0 && eye1);
+    VrCheckTick();
     BeginFrame();
     RumbleTick();  // D-111
 }

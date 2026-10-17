@@ -1,5 +1,6 @@
 #pragma once
 #include "../core/mat.h"
+#include <cstddef>
 
 namespace gowvr::stereo {
 
@@ -48,6 +49,8 @@ void UiScale(float s);
 void UiScaleFp(float s);  // D-102: UI scale in F1 / F3 (ui_scale_fp)
 // D-107: while head-aiming (+400 ms) - the game reticle's UI spot / radius and where the HUD draws it (UI uv)
 bool AimReticleDisplay(float* srcU, float* srcV, float* srcR, float* dstU, float* dstV);
+// VR check line (log): UI view updates scaled / skipped and why, and the flat 2D screen's state and signals
+void UiDiagText(char* out, size_t n);
 float UiScaleCurrent();   // D-104: the sharp HUD scale now (ui_scale / ui_scale_fp in F1 F3; "uiscale", "uiscalefp")
 // D-147: the head camera (eye midpoint, camera->world) and its projection tangents as view A got them this frame; false
 // when no head camera ran in the last 250 ms (any thread)

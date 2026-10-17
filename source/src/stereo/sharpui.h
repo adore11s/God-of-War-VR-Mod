@@ -10,6 +10,8 @@ void SharpUiInstall(ID3D11DeviceContext* ctx);  // device creation (after cbprob
 // Game thread, from UiScaleView: true = this 2D UI view is drawn unscaled and marked for the composite (the caller then
 // does not scale it); false = sharp HUD off / not working - the caller scales the view as before
 bool SharpUiMarkView(uint8_t* view);
+// VR check line (log): the sharp HUD's state and counters
+void SharpUiDiagText(char* out, size_t n);
 // Render thread, right before an eye image is copied from the backbuffer and at Present: paste this eye's HUD
 void SharpUiFinish(ID3D11DeviceContext* ctx, ID3D11Texture2D* bb);
 void SharpUiOnResize();              // swapchain ResizeBuffers: drop our view of the backbuffer

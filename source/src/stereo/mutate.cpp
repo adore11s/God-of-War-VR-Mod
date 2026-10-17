@@ -305,6 +305,11 @@ int g_screen2DMode = -1;
 std::atomic<bool> g_screen2D{false};
 std::atomic<uint64_t> g_viewAUpdates{0};  // D-083 loadwatch
 uint64_t g_uiScaled = 0, g_uiUpdates = 0;
+// VR check (log): why a UI view update was not scaled here, and the flat screen's signals (UiDiagText). On another
+// game build a view laid out differently would show up as "not orthographic" / never marked instead of scaled.
+uint64_t g_uiSkipCam = 0, g_uiSkipPersp = 0, g_uiSharp = 0;
+bool g_lastPause = false, g_lastLoading = false, g_lastFaded = false;
+float g_lastFadeA = 0.f;
 
 // D-102 (owner: "make the aiming icon bigger in F3 and F1 mode"): the UI is one layer (D-101), so in the first-person
 // modes it gets its own scale - ui_scale_fp 0.5 (third person keeps ui_scale 0.35). In F1 the Combat HUD (health / rage /
@@ -325,11 +330,11 @@ void UiScaleView(uint8_t* view) {
     }
     const bool aiming = aimSeen && GetTickCount64() - aimSeen < 400;
     const float s = (fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale;
-    if (!g_headCamOn || g_screen2D.load()) return;
+    if (!g_headCamOn || g_screen2D.load()) { ++g_uiSkipCam; return; }
     float* P = (float*)(view + 0xd0);
-    if (P[11] != 0.f || P[15] != 1.f) return;  // orthographic only (a perspective P has P23 = -1)
+    if (P[11] != 0.f || P[15] != 1.f) { ++g_uiSkipPersp; return; }  // orthographic only (a perspective P has P23 = -1)
     // D-104 sharp HUD: the UI is drawn unscaled into the mod's own target and pasted in scaled (sharpui.cpp)
-    if (SharpUiMarkView(view)) return;
+    if (SharpUiMarkView(view)) { ++g_uiSharp; return; }
     if (s <= 0.05f || fabsf(s - 1.f) < 1e-3f) return;
     float* VP = (float*)(view + 0x50);
     float* iP = (float*)(view + 0x190);
@@ -482,6 +487,7 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
         static const bool fadeOn = config::GetFloat("screen_2d_fades", 1.f) > 0.5f;
         const bool faded = fadeOn && fadeCover && fadePosed < 1200;
         const bool pause = *At<uint8_t>(kInPauseMenuVa) != 0;
+        g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA;
         const bool on = g_headCamOn && (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded)));
         if (on != g_screen2D.load())
             Log("ui: %s", on ? (pause ? "2D screen (pause menu): flat game camera, one kick"
@@ -1018,6 +1024,17 @@ bool HeadCameraForUi(Mat4* camToWorld, float* tanX, float* tanY) {
     if (ok) { *camToWorld = g_uiCam; *tanX = g_uiCamTan[0]; *tanY = g_uiCamTan[1]; }
     ReleaseSRWLockShared(&g_uiCamLock);
     return ok;
+}
+
+void UiDiagText(char* out, size_t n) {
+    sprintf_s(out, n,
+              "UI view updates %llu: scaled %llu, by the sharp HUD %llu, skipped (head camera off / 2D screen) %llu, "
+              "skipped (not orthographic) %llu | 2D screen %s (mode %d; pause menu %d, loading %d, faded %d alpha %.2f; "
+              "head camera %d)",
+              (unsigned long long)g_uiUpdates, (unsigned long long)g_uiScaled, (unsigned long long)g_uiSharp,
+              (unsigned long long)g_uiSkipCam, (unsigned long long)g_uiSkipPersp, g_screen2D.load() ? "ON" : "off",
+              g_screen2DMode, g_lastPause ? 1 : 0, g_lastLoading ? 1 : 0, g_lastFaded ? 1 : 0, g_lastFadeA,
+              g_headCamOn ? 1 : 0);
 }
 
 float UiScaleCurrent() {
