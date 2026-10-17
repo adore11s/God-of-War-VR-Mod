@@ -9,6 +9,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Remember the two first-person shortcuts.**
   - **First person during gameplay:** press the **right trigger next to your head**.
   - **First person during cutscenes:** **hold** the **right trigger next to your head**.
+- **The first-person view sits slightly off Kratos' head, on purpose.** Seen from exactly where his eyes are, his shoulder armour blocks the view, so the camera sits a little in front of and above that spot.
 - **Tested only up to the World Serpent scene.** After that you may get crashes or wrong body animations.
 - **Your hands feel in the wrong place or don't move right?** Switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
