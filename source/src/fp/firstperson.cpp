@@ -672,8 +672,8 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
     if (g_fwd < -99.f) g_fwd = config::GetFloat("fp_forward", 0.2f);
     for (int j = 0; j < 3; ++j) base->m[3][j] -= base->m[2][j] * g_fwd;
     // D-067 (owner: "move the default F1 head position a bit to the right"): along the base's right axis, F1 gameplay;
-    // gowvr.ini fp_right, command "fpright <m>"
-    if (g_right < -99.f) g_right = config::GetFloat("fp_right", 0.04f);
+    // gowvr.ini fp_right, command "fpright <m>". Owner 2026-10-17: "try to make it 0 cm to the right" - 0 (was 0.04)
+    if (g_right < -99.f) g_right = config::GetFloat("fp_right", 0.f);
     if (mode == 1)
         for (int j = 0; j < 3; ++j) base->m[3][j] += base->m[0][j] * g_right;
     // D-079 (owner: "make the default camera a bit more south"): lower, F1 gameplay; gowvr.ini fp_down, command "fpdown <m>"

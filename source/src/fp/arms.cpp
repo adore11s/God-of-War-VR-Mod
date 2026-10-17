@@ -1580,7 +1580,8 @@ void ArmsSelectController() {
                        low.find("meta") != std::string::npos;
     g_pitchKey = psvr2 ? "wristpitch_psvr2" : quest ? "wristpitch_quest" : "wristpitch_other";
     g_family = psvr2 ? "psvr2" : quest ? "quest" : "other";
-    g_pitchDeg = config::GetFloat(g_pitchKey, psvr2 ? 35.f : 0.f);
+    // Meta Quest 25 (a Quest 3 tester on Virtual Desktop / VDXR, Touch profile: "the controllers now align perfectly")
+    g_pitchDeg = config::GetFloat(g_pitchKey, psvr2 ? 35.f : quest ? 25.f : 0.f);
     g_yawDeg = config::GetFloat(FamilyKey("wristyaw").c_str(), 0.f);
     g_rollDeg = config::GetFloat(FamilyKey("wristroll").c_str(), 0.f);
     Log("arms: headset '%s' -> %s, wrist pitch %.0f yaw %.0f roll %.0f deg (F5/F6, Ctrl+F5/F6, Shift+F5/F6 adjust, saved "

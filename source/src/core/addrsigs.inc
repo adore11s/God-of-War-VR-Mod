@@ -86,6 +86,7 @@
 {0x140b35270ull, 0, 0, 0, 0, "48 89 4c 24 08 53 56 48 81 ec 88 00 00 00 b8 01 00 00 00"},  // src\stereo\r1.cpp
 {0x140bc1820ull, 0, 0, 0, 0, "48 89 5c 24 08 57 48 83 ec 70 8b fa 0f 29 74 24 60"},  // src\stereo\mutate.cpp
 {0x140bc1db0ull, 0, 48, 0, 0, "?? ?? f0 ff 88 ac 00 00 00 b8 01 00 00 00 48 83 c4 20 5b c3 b8 1f 00 00 00 48 83 c4 20 5b c3 cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc 48 89 5c 24 08"},  // src\stereo\mutate.cpp
+{0x140d60e38ull, 1, 2, 6, 0, "8d 0d ?? ?? ?? ?? 4c 8d 04 81 7d ??"},  // src\frame\rendersize.cpp
 {0x140def118ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 48 89 01 48 89 59 68"},  // src\stereo\taaeyes.cpp
 {0x140df8b28ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 48 89 01 48 81 c1 c8 01 00 00"},  // src\stereo\r1.cpp
 {0x14105a000ull, 2, 0, 0, 0, ".data"},  // src\diag\cmd.cpp, src\stereo\r1.cpp

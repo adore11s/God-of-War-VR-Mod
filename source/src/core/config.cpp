@@ -133,4 +133,16 @@ void SetFloats(const std::vector<std::pair<const char*, float>>& values) {
 
 void SetFloat(const char* key, float value) { SetFloats({{key, value}}); }
 
+bool CreateIfMissing(const char* text) {
+    if (!text || !*text || GetFileAttributesW(Path().c_str()) != INVALID_FILE_ATTRIBUTES) return false;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, Path().c_str(), L"wb") || !f) { Log("config: could not create gowvr.ini"); return false; }
+    fwrite(text, 1, strlen(text), f);
+    fclose(f);
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_loaded = false;  // read from the new file at the next GetFloat
+    Log("config: gowvr.ini created with the default VR settings (first start)");
+    return true;
+}
+
 }  // namespace gowvr::config

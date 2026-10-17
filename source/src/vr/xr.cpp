@@ -8,6 +8,9 @@
 #include "../core/addr.h"
 #include "../stereo/mutate.h"
 #include "../stereo/sharpui.h"
+#include "../frame/rendersize.h"
+#include "panel.h"
+#include "../stereo/sharpui.h"
 #include <windows.h>
 #include <d3d11_1.h>
 #include <dxgi.h>
@@ -131,6 +134,7 @@ ID3D11Device1* g_dev1 = nullptr;
 ID3DDeviceContextState* g_blitState = nullptr;
 ID3D11VertexShader* g_vs = nullptr;
 ID3D11PixelShader* g_ps = nullptr;
+ID3D11PixelShader* g_psHud = nullptr;  // the HUD layer: premultiplied gamma -> premultiplied linear (sRGB target)
 ID3D11SamplerState* g_samp = nullptr;
 ID3D11RasterizerState* g_rs = nullptr;
 
@@ -680,6 +684,12 @@ V vs(uint id : SV_VertexID) {
 }
 float3 lin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
 float4 ps(V i) : SV_Target { return float4(lin(saturate(src.Sample(smp, i.uv).rgb)), 1); }
+float4 ps_hud(V i) : SV_Target {
+    float4 c = src.Sample(smp, i.uv);
+    float a = saturate(c.a);
+    float3 rgb = a > 1e-4 ? saturate(c.rgb / a) : 0;
+    return float4(lin(rgb) * a, a);
+}
 )";
 
 bool CreateBlit() {
@@ -699,6 +709,12 @@ bool CreateBlit() {
               SUCCEEDED(g_dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &g_ps));
     vsb->Release();
     psb->Release();
+    ID3DBlob* hb = nullptr;
+    if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "ps_hud", "ps_5_0", 0, 0, &hb, &err))) {
+        if (FAILED(g_dev->CreatePixelShader(hb->GetBufferPointer(), hb->GetBufferSize(), nullptr, &g_psHud))) g_psHud = nullptr;
+        hb->Release();
+    }
+    if (!g_psHud) Log("xr: HUD layer shader unavailable - the HUD is pasted into the eye images");
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -715,16 +731,26 @@ bool CreateBlit() {
     return ok;
 }
 
+void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
+             uint32_t w, uint32_t h);
+
 void Blit(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h) {
     ID3D11ShaderResourceView* srv = nullptr;
     if (FAILED(g_dev->CreateShaderResourceView(src, nullptr, &srv))) return;
+    BlitSrv(ctx, srv, g_ps, rtv, w, h);
+    srv->Release();
+}
+
+// a full-screen pass of `ps` sampling `srv` into the top-left w x h of `rtv`
+void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
+             uint32_t w, uint32_t h) {
     ID3DDeviceContextState* prev = nullptr;
     ctx->SwapDeviceContextState(g_blitState, &prev);  // the game's whole pipeline state is parked in `prev`
     D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->IASetInputLayout(nullptr);
     ctx->VSSetShader(g_vs, nullptr, 0);
-    ctx->PSSetShader(g_ps, nullptr, 0);
+    ctx->PSSetShader(ps, nullptr, 0);
     ctx->PSSetShaderResources(0, 1, &srv);
     ctx->PSSetSamplers(0, 1, &g_samp);
     ctx->RSSetState(g_rs);
@@ -737,7 +763,6 @@ void Blit(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetVie
     ctx->OMSetRenderTargets(1, &noRtv, nullptr);
     ctx->SwapDeviceContextState(prev, nullptr);
     if (prev) prev->Release();
-    srv->Release();
 }
 
 // ---- session ---------------------------------------------------------------------------------------------------------
@@ -870,9 +895,120 @@ XrCompositionLayerProjectionView g_lastPv[2] = {};
 bool g_haveLastPv = false;
 std::atomic<uint64_t> g_quadFrames{0};
 
+uint32_t g_quadSrcW = 0, g_quadSrcH = 0;  // the game frame size the screen swapchain was made for
+
+// The last layer the headset got (owner: "when I turn from 3D to the 2D screen I see the enlarged UI for half a
+// second"): while the game frame is not yet the size its mode needs (frame/rendersize: square for the stereo view, the
+// window's own size for the flat screen - the game resizes a frame or two after the switch) that layer is shown again,
+// at most hold_ms (1500) in a row.
+enum LastLayer { kLastNone, kLastProjection, kLastQuad };
+LastLayer g_lastKind = kLastNone;
+XrCompositionLayerQuad g_lastQuadLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+ULONGLONG g_holdSince = 0;
+uint64_t g_holdFrames = 0;
+
+// VR settings panel (panel.cpp) and its pointer dot: static images, uploaded only when they change
+EyeSwap g_panelSc, g_cursorSc;
+EyeSwap g_hudSc[2];  // the HUD layer of each eye (sharpui.cpp SharpUiHudLayer)
+uint64_t g_hudQuads = 0;
+
+bool EnsureRtSwapchain(EyeSwap& s, uint32_t w, uint32_t h, const char* what) {
+    if (s.sc && s.w == w && s.h == h) return true;
+    if (s.sc) {
+        for (auto* r : s.rtvs) if (r) r->Release();
+        s.rtvs.clear();
+        s.images.clear();
+        xrDestroySwapchain(s.sc);
+        s.sc = nullptr;
+        s.pending = false;
+    }
+    XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    ci.format = g_format;
+    ci.sampleCount = 1;
+    ci.width = w;
+    ci.height = h;
+    ci.faceCount = ci.arraySize = ci.mipCount = 1;
+    if (!Succeeded(xrCreateSwapchain(g_sess, &ci, &s.sc))) { Log("xr: %s swapchain failed", what); s.sc = nullptr; return false; }
+    uint32_t n = 0;
+    xrEnumerateSwapchainImages(s.sc, 0, &n, nullptr);
+    std::vector<XrSwapchainImageD3D11KHR> imgs(n, XrSwapchainImageD3D11KHR{XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    xrEnumerateSwapchainImages(s.sc, n, &n, (XrBaseHeader*)imgs.data());
+    for (auto& im : imgs) {
+        D3D11_RENDER_TARGET_VIEW_DESC rd{};
+        rd.Format = (DXGI_FORMAT)g_format;
+        rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        ID3D11RenderTargetView* rtv = nullptr;
+        if (FAILED(g_dev->CreateRenderTargetView(im.texture, &rd, &rtv))) { Log("xr: %s RTV failed", what); return false; }
+        s.images.push_back(im.texture);
+        s.rtvs.push_back(rtv);
+    }
+    s.w = w;
+    s.h = h;
+    Log("xr: %s swapchain %ux%u", what, w, h);
+    return true;
+}
+bool g_panelUploaded = false, g_cursorUploaded = false;
+
+bool EnsureStaticSwapchain(EyeSwap& s, uint32_t w, uint32_t h, const char* what) {
+    if (s.sc && s.w == w && s.h == h) return true;
+    if (s.sc) { s.images.clear(); xrDestroySwapchain(s.sc); s.sc = nullptr; s.pending = false; }
+    XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    ci.format = g_format;
+    ci.sampleCount = 1;
+    ci.width = w;
+    ci.height = h;
+    ci.faceCount = ci.arraySize = ci.mipCount = 1;
+    if (!Succeeded(xrCreateSwapchain(g_sess, &ci, &s.sc))) { Log("xr: %s swapchain failed", what); s.sc = nullptr; return false; }
+    uint32_t n = 0;
+    xrEnumerateSwapchainImages(s.sc, 0, &n, nullptr);
+    std::vector<XrSwapchainImageD3D11KHR> imgs(n, XrSwapchainImageD3D11KHR{XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    xrEnumerateSwapchainImages(s.sc, n, &n, (XrBaseHeader*)imgs.data());
+    s.images.clear();
+    for (auto& im : imgs) s.images.push_back(im.texture);
+    s.w = w;
+    s.h = h;
+    Log("xr: %s swapchain %ux%u", what, w, h);
+    return true;
+}
+
+int AcquireReady(EyeSwap& s, const char* what);
+void ReleaseImage(EyeSwap& s);
+
+// 0xAARRGGBB pixels into the next image (the swapchain's format is R8G8B8A8 or B8G8R8A8 sRGB)
+bool UploadStatic(ID3D11DeviceContext* ctx, EyeSwap& s, const uint32_t* argb, const char* what) {
+    const int idx = AcquireReady(s, what);
+    if (idx < 0) return false;
+    static std::vector<uint32_t> tmp;
+    const uint32_t* data = argb;
+    if (g_format == (int64_t)DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || g_format == (int64_t)DXGI_FORMAT_R8G8B8A8_UNORM) {
+        tmp.resize((size_t)s.w * s.h);
+        for (size_t i = 0; i < tmp.size(); ++i) {
+            const uint32_t v = argb[i];  // ARGB -> ABGR (R in the low byte)
+            tmp[i] = (v & 0xff00ff00u) | (v >> 16 & 0xffu) | (v & 0xffu) << 16;
+        }
+        data = tmp.data();
+    }
+    ctx->UpdateSubresource(s.images[idx], 0, nullptr, data, s.w * 4, 0);
+    ReleaseImage(s);
+    return true;
+}
+
 bool EnsureQuadSwapchain(uint32_t bbW, uint32_t bbH) {
-    if (g_quad.sc) return true;
+    if (g_quad.sc && bbW == g_quadSrcW && bbH == g_quadSrcH) return true;
     if (!bbW || !bbH) return false;
+    if (g_quad.sc) {  // the game frame changed size (square VR picture on / off, a resolution change): a new screen
+        for (auto* r : g_quad.rtvs) if (r) r->Release();
+        g_quad.rtvs.clear();
+        g_quad.images.clear();
+        xrDestroySwapchain(g_quad.sc);
+        g_quad.sc = nullptr;
+        g_quad.pending = false;
+        Log("xr: screen swapchain dropped (game frame %ux%u -> %ux%u)", g_quadSrcW, g_quadSrcH, bbW, bbH);
+    }
+    g_quadSrcW = bbW;
+    g_quadSrcH = bbH;
     static const float maxW = config::GetFloat("screen_px", 2560.f);
     g_quad.w = (uint32_t)fminf((float)bbW, maxW);
     g_quad.h = (uint32_t)((float)g_quad.w * (float)bbH / (float)bbW + 0.5f);
@@ -933,6 +1069,11 @@ void DestroySession(const char* why, bool dropInstance) {
     dropSwap(g_eye[0]);
     dropSwap(g_eye[1]);
     dropSwap(g_quad);
+    dropSwap(g_panelSc);
+    dropSwap(g_hudSc[0]);
+    dropSwap(g_hudSc[1]);
+    dropSwap(g_cursorSc);
+    g_panelUploaded = g_cursorUploaded = false;
     for (int k = 0; k < 2; ++k) {
         if (g_handTracker[k] && xrDestroyHandTrackerEXT) xrDestroyHandTrackerEXT(g_handTracker[k]);
         g_handTracker[k] = nullptr;
@@ -949,6 +1090,7 @@ void DestroySession(const char* why, bool dropInstance) {
     g_actionsReady = false;
     g_state = XR_SESSION_STATE_UNKNOWN;
     g_quadPlaced = g_haveLastPv = false;
+    g_lastKind = kLastNone;  // its swapchains are gone
     g_monoRun = 0;
     if (dropInstance && g_inst) {
         xrDestroyInstance(g_inst);  // (its action set and actions with it)
@@ -1127,7 +1269,7 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
     Log("summary: hand offsets in gowvr.ini (pitch / yaw / roll deg): psvr2 %.0f / %.0f / %.0f, quest %.0f / %.0f / %.0f, "
         "other %.0f / %.0f / %.0f (the 'arms: headset' line says which set is used)",
         config::GetFloat("wristpitch_psvr2", 35.f), config::GetFloat("wristyaw_psvr2", 0.f),
-        config::GetFloat("wristroll_psvr2", 0.f), config::GetFloat("wristpitch_quest", 0.f),
+        config::GetFloat("wristroll_psvr2", 0.f), config::GetFloat("wristpitch_quest", 25.f),
         config::GetFloat("wristyaw_quest", 0.f), config::GetFloat("wristroll_quest", 0.f),
         config::GetFloat("wristpitch_other", 0.f), config::GetFloat("wristyaw_other", 0.f),
         config::GetFloat("wristroll_other", 0.f));
@@ -1140,6 +1282,9 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         stereo::SharpUiDiagText(hud, sizeof(hud));
         Log("summary: %s", ui);
         Log("summary: %s", hud);
+        char rs[256];
+        frame::RenderSizeDiagText(rs, sizeof(rs));
+        Log("summary: %s", rs);
     }
     Log("==== end of VR summary #%d ====", number);
     (void)sc;
@@ -1154,12 +1299,18 @@ void VrCheckTick() {
     if (!next) { next = now + 20000; return; }  // first one 20 s in (menus / intro)
     if (now < next) return;
     next = now + (++lines < 30 ? 60000 : 600000);
-    char ui[512], hud[256];
+    char ui[512], hud[256], rs[256];
     stereo::UiDiagText(ui, sizeof(ui));
     stereo::SharpUiDiagText(hud, sizeof(hud));
-    Log("VR check %d: frames to the headset %llu (flat screen %llu, flat backbuffer %llu) | %s | %s", lines,
+    frame::RenderSizeDiagText(rs, sizeof(rs));
+    Log("VR check %d: frames to the headset %llu (flat screen %llu, flat backbuffer %llu) | %s | %s | %s | hand offsets "
+        "pitch/yaw/roll psvr2 %.0f/%.0f/%.0f quest %.0f/%.0f/%.0f other %.0f/%.0f/%.0f", lines,
         (unsigned long long)g_submitted.load(), (unsigned long long)g_quadFrames.load(),
-        (unsigned long long)g_mono.load(), ui, hud);
+        (unsigned long long)g_mono.load(), ui, hud, rs, config::GetFloat("wristpitch_psvr2", 35.f),
+        config::GetFloat("wristyaw_psvr2", 0.f), config::GetFloat("wristroll_psvr2", 0.f),
+        config::GetFloat("wristpitch_quest", 25.f), config::GetFloat("wristyaw_quest", 0.f),
+        config::GetFloat("wristroll_quest", 0.f), config::GetFloat("wristpitch_other", 0.f),
+        config::GetFloat("wristyaw_other", 0.f), config::GetFloat("wristroll_other", 0.f));
 }
 
 void MaybeLogSummary(IDXGISwapChain* sc, bool stereo) {
@@ -1179,6 +1330,34 @@ void MaybeLogSummary(IDXGISwapChain* sc, bool stereo) {
     LogSummary(sc, d, in, stereo, ++logged);
 }
 
+// The frame from the switch between the stereo view and the flat screen: its size is not the one its mode needs yet.
+// The last layer is submitted again instead (true = done, the frame is not shown).
+bool HoldSwitchFrame(ID3D11Texture2D* frame, bool flat) {
+    uint32_t ew = 0, eh = 0;
+    D3D11_TEXTURE2D_DESC fd{};
+    if (frame) frame->GetDesc(&fd);
+    const bool wrong = frame && frame::RenderSizeExpected(flat, &ew, &eh) && (fd.Width != ew || fd.Height != eh);
+    const ULONGLONG now = GetTickCount64();
+    static const ULONGLONG maxMs = (ULONGLONG)fmaxf(config::GetFloat("hold_ms", 1500.f), 0.f);
+    if (!wrong || g_lastKind == kLastNone || !g_frame.shouldRender || !g_viewsValid) { g_holdSince = 0; return false; }
+    if (!g_holdSince) g_holdSince = now;
+    if (now - g_holdSince > maxMs) return false;  // never stuck: shown as it is after hold_ms
+    XrCompositionLayerProjection proj{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, g_space, 2, g_lastPv};
+    const XrBaseHeader* layers[] = {g_lastKind == kLastQuad ? (const XrBaseHeader*)&g_lastQuadLayer
+                                                            : (const XrBaseHeader*)&proj};
+    XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO, nullptr, g_frame.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 1u,
+                      layers};
+    XrResult r = xrEndFrame(g_sess, &fe);
+    NoteLoss(r);  // D-110
+    if (!Succeeded(r)) Log("xr: xrEndFrame %s", ResultStr(r).c_str());
+    else ++g_submitted;
+    g_frameBegun = false;
+    if (++g_holdFrames <= 5 || g_holdFrames % 100 == 0)
+        Log("xr: %s frame %ux%u (needs %ux%u) - the last %s shown again (%llu held)", flat ? "flat" : "stereo", fd.Width,
+            fd.Height, ew, eh, g_lastKind == kLastQuad ? "screen" : "stereo view", (unsigned long long)g_holdFrames);
+    return true;
+}
+
 void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* eye0, ID3D11Texture2D* eye1,
               const EyeViews* used) {
     ID3D11Texture2D* bb = nullptr;
@@ -1187,6 +1366,11 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb);
         src[0] = src[1] = bb;
         ++g_mono;
+    }
+    static const bool screenOnHold = config::GetFloat("screen_2d", 1.f) > 0.5f;
+    if (HoldSwitchFrame(bb ? bb : eye0, bb != nullptr && screenOnHold)) {
+        if (bb) bb->Release();
+        return;
     }
     static const bool screenOn = config::GetFloat("screen_2d", 1.f) > 0.5f;
     if (bb && screenOn) {
@@ -1227,18 +1411,53 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0, g_space, XR_EYE_VISIBILITY_BOTH,
                                     {g_quad.sc, {{0, 0}, {(int32_t)g_quad.w, (int32_t)g_quad.h}}, 0}, g_quadPose,
                                     {width, g_quad.w ? width * (float)g_quad.h / (float)g_quad.w : width * 0.5625f}};
-        const XrBaseHeader* layers[] = {(const XrBaseHeader*)&quad};
+        const XrBaseHeader* layers[3] = {(const XrBaseHeader*)&quad, nullptr, nullptr};
+        uint32_t nLayers = ok ? 1u : 0u;
+        // the VR settings panel next to the screen while the pause menu is open (panel.cpp)
+        XrCompositionLayerQuad panelQ{XR_TYPE_COMPOSITION_LAYER_QUAD}, cursorQ{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        if (ok) {
+            AcquireSRWLockShared(&g_inputLock);
+            const InputSnapshot in = g_input;
+            ReleaseSRWLockShared(&g_inputLock);
+            const float head[3] = {0.5f * (g_views[0].pose.position.x + g_views[1].pose.position.x),
+                                   0.5f * (g_views[0].pose.position.y + g_views[1].pose.position.y),
+                                   0.5f * (g_views[0].pose.position.z + g_views[1].pose.position.z)};
+            Pose screen{};
+            memcpy(&screen, &g_quadPose, sizeof(screen));
+            PanelLayer pl;
+            if (PanelFrame(in, screen, width, head, &pl) && EnsureStaticSwapchain(g_panelSc, (uint32_t)pl.pw, (uint32_t)pl.ph, "panel")) {
+                if ((pl.dirty || !g_panelUploaded) && UploadStatic(ctx, g_panelSc, pl.pixels, "panel")) g_panelUploaded = true;
+                if (g_panelUploaded) {
+                    panelQ = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0, g_space, XR_EYE_VISIBILITY_BOTH,
+                                                    {g_panelSc.sc, {{0, 0}, {(int32_t)g_panelSc.w, (int32_t)g_panelSc.h}}, 0},
+                                                    {}, {pl.w, pl.h}};
+                    memcpy(&panelQ.pose, &pl.pose, sizeof(panelQ.pose));
+                    layers[nLayers++] = (const XrBaseHeader*)&panelQ;
+                }
+                if (pl.cursor && g_panelUploaded && EnsureStaticSwapchain(g_cursorSc, 64, 64, "panel pointer")) {
+                    if (!g_cursorUploaded && UploadStatic(ctx, g_cursorSc, PanelCursorPixels(), "panel pointer")) g_cursorUploaded = true;
+                    if (g_cursorUploaded) {
+                        cursorQ = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u /*SOURCE_ALPHA*/, g_space,
+                                                         XR_EYE_VISIBILITY_BOTH, {g_cursorSc.sc, {{0, 0}, {64, 64}}, 0}, {},
+                                                         {pl.cursorSize, pl.cursorSize}};
+                        memcpy(&cursorQ.pose, &pl.cursorPose, sizeof(cursorQ.pose));
+                        layers[nLayers++] = (const XrBaseHeader*)&cursorQ;
+                    }
+                }
+            }
+        }
         XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO, nullptr, g_frame.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-                          ok ? 1u : 0u, layers};
+                          nLayers, layers};
         XrResult r = xrEndFrame(g_sess, &fe);
         NoteLoss(r);  // D-110
         if (!Succeeded(r)) Log("xr: xrEndFrame %s", ResultStr(r).c_str());
-        else if (ok) ++g_submitted;
+        else if (ok) { ++g_submitted; g_lastQuadLayer = quad; g_lastKind = kLastQuad; }
         if (ok && (++g_quadFrames == 1 || g_quadFrames % 900 == 0))
             Log("xr: flat frame as a screen #%llu (%.1f m wide)", (unsigned long long)g_quadFrames.load(), width);
         g_frameBegun = false;
         return;
     }
+    PanelHidden();  // (no flat screen this frame: no panel)
     if (!bb) {
         if (g_monoRun >= 3) Log("xr: stereo again after %d flat frame(s)", g_monoRun);
         g_monoRun = 0;
@@ -1278,11 +1497,51 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     if (ok && !bb) {
         memcpy(g_lastPv, pv, sizeof(g_lastPv));
         g_haveLastPv = true;
+        g_lastKind = kLastProjection;
     }
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, g_space, 2, pv};
-    const XrBaseHeader* layers[] = {(const XrBaseHeader*)&layer};
+    const XrBaseHeader* layers[3] = {(const XrBaseHeader*)&layer, nullptr, nullptr};
+    uint32_t nLayers = ok ? 1u : 0u;
+    // the HUD of each eye as its own quad (sharpui.cpp): where the paste put it - centred in the eye's frustum, ui_scale
+    // of it - in front of that eye only, so the compositor samples the full-resolution HUD once
+    XrCompositionLayerQuad hudQ[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
+    for (int e = 0; e < 2 && ok && g_psHud; ++e) {
+        ID3D11ShaderResourceView* hsrv = nullptr;
+        uint32_t hw = 0, hh = 0;
+        float sx = 0.f, sy = 0.f;
+        if (!stereo::SharpUiHudLayer(e, &hsrv, &hw, &hh, &sx, &sy)) continue;
+        // texels for ~1.5 x the headset image's pixels under the HUD (the compositor's own downsampling stays mild)
+        static const float density = fminf(fmaxf(config::GetFloat("hud_layer_density", 1.5f), 0.5f), 4.f);
+        const uint32_t qw = (uint32_t)fminf((float)hw, ceilf(density * sx * (float)g_eye[e].w));
+        const uint32_t qh = (uint32_t)fminf((float)hh, ceilf(density * sy * (float)g_eye[e].h));
+        if (qw < 16 || qh < 16 || !EnsureRtSwapchain(g_hudSc[e], hw, hh, e ? "HUD layer eye 1" : "HUD layer eye 0")) continue;
+        const int idx = AcquireReady(g_hudSc[e], "HUD layer");
+        if (idx < 0) continue;
+        static const FLOAT clear[4] = {0, 0, 0, 0};
+        ctx->ClearRenderTargetView(g_hudSc[e].rtvs[idx], clear);
+        BlitSrv(ctx, hsrv, g_psHud, g_hudSc[e].rtvs[idx], qw, qh);
+        ReleaseImage(g_hudSc[e]);
+        const XrFovf& f = pv[e].fov;
+        const float D = 2.f, tl = tanf(f.angleLeft), tr = tanf(f.angleRight), tu = tanf(f.angleUp), td = tanf(f.angleDown);
+        const float local[3] = {D * 0.5f * (tl + tr), D * 0.5f * (tu + td), -D};  // the frustum's middle at D metres
+        const float* q = &pv[e].pose.orientation.x;
+        float off[3];
+        QRotate(q, local, off);
+        XrCompositionLayerQuad& hq = hudQ[e];
+        hq = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u /*SOURCE_ALPHA, premultiplied*/, g_space,
+                                    e ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT,
+                                    {g_hudSc[e].sc, {{0, 0}, {(int32_t)qw, (int32_t)qh}}, 0}, pv[e].pose,
+                                    {D * (tr - tl) * sx, D * (tu - td) * sy}};
+        hq.pose.position.x += off[0];
+        hq.pose.position.y += off[1];
+        hq.pose.position.z += off[2];
+        layers[nLayers++] = (const XrBaseHeader*)&hq;
+        if (++g_hudQuads <= 2 || g_hudQuads % 10000 == 0)
+            Log("xr: HUD layer eye %d %ux%u of %ux%u (%.2f x %.2f m at %.0f m) #%llu", e, qw, qh, hw, hh,
+                hq.size.width, hq.size.height, D, (unsigned long long)g_hudQuads);
+    }
     XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO, nullptr, g_frame.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-                      ok ? 1u : 0u, layers};
+                      nLayers, layers};
     XrResult r = xrEndFrame(g_sess, &fe);
     NoteLoss(r);  // D-110
     if (!Succeeded(r)) Log("xr: xrEndFrame %s", ResultStr(r).c_str());

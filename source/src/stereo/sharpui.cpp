@@ -33,6 +33,7 @@
 #include "../diag/shot.h"
 #include "../vr/xr.h"
 #include "../fp/firstperson.h"
+#include "eyes.h"
 #include <windows.h>
 #include <d3d11_1.h>
 #include <intrin.h>
@@ -906,7 +907,9 @@ cbuffer C : register(b0) {
     float2 retS;   // the game's reticle centre (UI uv)
     float2 retD;   // where it is drawn (eye image uv): the shot's direction
     float aspect;  // width / height
-    float3 pad;
+    float sY;      // the whole UI's vertical scale (s x UiVerticalFix: the headset's vertical stretch undone)
+    float sRetY;   // the reticle region's vertical scale
+    float pad;
 };
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V vs(uint id : SV_VertexID) {
@@ -916,10 +919,10 @@ V vs(uint id : SV_VertexID) {
     return o;
 }
 float4 ps(V i) : SV_Target {
-    float2 a = 0.5 + (i.uv - 0.5) / s;
+    float2 a = 0.5 + (i.uv - 0.5) / float2(s, sY);
     float4 m = ui.Sample(smp, a);
     if (any(a < 0) || any(a > 1)) m = 0;
-    float2 b = retS + (i.uv - retD) / sRet;
+    float2 b = retS + (i.uv - retD) / float2(sRet, sRetY);
     float4 r = ui.Sample(smp, b);
     if (retOn > 0.5) {
         float2 da = (a - retS) * float2(aspect, 1);
@@ -1001,9 +1004,10 @@ void Composite(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target) {
     // D-149: the aiming icon's own objects are placed (fp body.cpp ReticlePlace) - no region paste, which took everything
     // inside its circle along (enemy bars); the region paste remains the fallback when they were not seen
     const bool objRet = GetTickCount64() - g_retObjAt.load() < 300;
-    struct { float s, sRet, retOn, rSrc, retSx, retSy, retDx, retDy, aspect, pad0, pad1, pad2; } k{
+    const float aspect = (float)g_uiW / (float)(g_uiH ? g_uiH : 1), fy = UiVerticalFix(aspect);
+    struct { float s, sRet, retOn, rSrc, retSx, retSy, retDx, retDy, aspect, sY, sRetY, pad; } k{
         fmaxf(uiScale, 0.05f), fmaxf(retScale, 0.05f), aiming && !objRet ? 1.f : 0.f, sr, su, sv, du, dv,
-        (float)g_uiW / (float)(g_uiH ? g_uiH : 1), 0.f, 0.f, 0.f};
+        aspect, fmaxf(uiScale * fy, 0.02f), fmaxf(retScale * fy, 0.02f), 0.f};
     // (D-118 / D-122 / D-123 changed this function after crashes here - reverted in D-124: the cause was g_rtCache
     // writing over g_cb / g_rs, not the context-state swap or the Map)
     ID3DDeviceContextState* prev = nullptr;
@@ -1093,9 +1097,64 @@ void HudShot(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target) {
     st->Release();
 }
 
+// The HUD as its own OpenXR layer (owner: "make the HUD sharper - it is very low res, even before the square picture"):
+// pasted into the eye image it was the full-resolution UI shrunk to ui_scale of the frame, then stretched again into
+// the headset's image - two resamplings. Now each eye's finished HUD (full resolution, with mips) is copied here and
+// xr.cpp shows it as a quad layer exactly where the paste was: the compositor samples it once, at the display's
+// resolution. Not while the aiming reticle region is moved to the shot's direction (that one is pasted as before).
+// gowvr.ini hud_layer=0: the paste as before.
+ID3D11Texture2D* g_hudEyeTex[2] = {};
+ID3D11ShaderResourceView* g_hudEyeSrv[2] = {};
+UINT g_hudEyeW = 0, g_hudEyeH = 0;
+std::atomic<bool> g_hudReady[2] = {false, false};
+float g_hudSx[2] = {0, 0}, g_hudSy[2] = {0, 0};
+uint64_t g_hudLayerFrames = 0;
+
+bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
+    if (!g_uiTex || eye < 0 || eye > 1) return false;
+    D3D11_TEXTURE2D_DESC d{};
+    g_uiTex->GetDesc(&d);
+    if (!g_hudEyeTex[eye] || g_hudEyeW != d.Width || g_hudEyeH != d.Height) {
+        for (int e = 0; e < 2; ++e) {
+            if (g_hudEyeSrv[e]) { g_hudEyeSrv[e]->Release(); g_hudEyeSrv[e] = nullptr; }
+            if (g_hudEyeTex[e]) { g_hudEyeTex[e]->Release(); g_hudEyeTex[e] = nullptr; }
+            g_hudReady[e] = false;
+        }
+        for (int e = 0; e < 2; ++e)
+            if (FAILED(g_dev->CreateTexture2D(&d, nullptr, &g_hudEyeTex[e])) ||
+                FAILED(g_dev->CreateShaderResourceView(g_hudEyeTex[e], nullptr, &g_hudEyeSrv[e]))) {
+                Log("sharpui: HUD layer textures failed - the HUD is pasted as before");
+                return false;
+            }
+        g_hudEyeW = d.Width;
+        g_hudEyeH = d.Height;
+        Log("sharpui: HUD layer textures %ux%u (the HUD as its own layer in the headset)", d.Width, d.Height);
+    }
+    ctx->CopyResource(g_hudEyeTex[eye], g_uiTex);
+    ctx->GenerateMips(g_hudEyeSrv[eye]);
+    const float s = fmaxf(UiScaleCurrent(), 0.05f);
+    g_hudSx[eye] = s;
+    g_hudSy[eye] = fmaxf(s * UiVerticalFix(d.Height ? (float)d.Width / (float)d.Height : 0.f), 0.02f);
+    g_hudReady[eye] = true;
+    if (++g_hudLayerFrames <= 2 || g_hudLayerFrames % 5000 == 0)
+        Log("sharpui: HUD as a layer, eye %d #%llu (scale %.2f x %.2f)", eye, (unsigned long long)g_hudLayerFrames,
+            g_hudSx[eye], g_hudSy[eye]);
+    return true;
+}
+
+// the aiming reticle region is moved to the shot's direction this frame (pasted into the eye image then)
+bool ReticleRegionMoved() {
+    float su, sv, sr, du, dv;
+    const bool aiming = AimReticleDisplay(&su, &sv, &sr, &du, &dv);
+    return aiming && GetTickCount64() - g_retObjAt.load() >= 300;
+}
+
 void PasteHud(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const char* where) {
     if (g_hudShotReq.exchange(false)) HudShot(ctx, target);
-    Composite(ctx, target);
+    static const bool layerOn = config::GetFloat("hud_layer", 1.f) > 0.5f;
+    const int eye = EyesRenderEye();
+    if (!(layerOn && vr::XrRunning() && eye >= 0 && !ReticleRegionMoved() && HudLayerCopy(ctx, eye)))
+        Composite(ctx, target);
     g_drew = false;
     g_needClear = true;  // the next UI draw (the other eye's) starts on a clear HUD target
     const uint64_t n = ++g_substFrames;
@@ -1119,12 +1178,24 @@ void SharpUiInstall(ID3D11DeviceContext* ctx) {
 void SharpUiDiagText(char* out, size_t n) {
     sprintf_s(out, n,
               "sharp HUD %s (executor hooks %s%s): UI views marked %llu, marked uploads seen %llu, UI draws redirected "
-              "%llu, HUD pastes %llu",
+              "%llu, HUD pastes %llu, vertical fix %.2f",
               !g_installed.load() ? "not installed" : g_broken.load() ? "NOT WORKING (scaled UI instead)"
                                                   : g_enabled.load() ? "on" : "off",
               g_sitesOk ? "installed" : "INCOMPLETE", g_installed.load() ? "" : " - not yet",
               (unsigned long long)g_markedFrames.load(), (unsigned long long)g_markSeen.load(),
-              (unsigned long long)g_substitutions.load(), (unsigned long long)g_substFrames.load());
+              (unsigned long long)g_substitutions.load(), (unsigned long long)g_substFrames.load(),
+              UiVerticalFix(g_uiH ? (float)g_uiW / (float)g_uiH : 0.f));
+}
+
+bool SharpUiHudLayer(int eye, ID3D11ShaderResourceView** srv, uint32_t* w, uint32_t* h, float* sx, float* sy) {
+    eye &= 1;
+    if (!g_hudReady[eye].exchange(false) || !g_hudEyeSrv[eye]) return false;
+    *srv = g_hudEyeSrv[eye];
+    *w = g_hudEyeW;
+    *h = g_hudEyeH;
+    *sx = g_hudSx[eye];
+    *sy = g_hudSy[eye];
+    return true;
 }
 
 bool SharpUiMarkView(uint8_t* view) {

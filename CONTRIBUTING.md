@@ -11,9 +11,8 @@ cmake -S source -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-This produces `build\Release\version.dll`. To try it:
-- copy it next to `GoW.exe`, or
-- put it in `files\` and run `Play God of War in VR.cmd`.
+This produces `build\Release\version.dll`. To try it, copy it next to `GoW.exe` and start the game. On its first start
+it writes the default `gowvr.ini` (`files\gowvr.ini`, built into the DLL).
 
 There are no other dependencies: the OpenXR declarations are hand-written (`source/src/vr/xr_min.h`) and the runtime is found through the registry.
 
@@ -84,4 +83,6 @@ that runs the mod's own resolver over a mapped GoW.exe (none of the game's code 
 1. Build Release.
 2. Copy `version.dll` into `files\`.
 3. Update `files\BUILD.txt`.
-4. Test `Play God of War in VR.cmd` and `Uninstall VR mod.cmd` on a clean game folder.
+4. Test on a clean game folder: `version.dll` next to `GoW.exe`, start the game, then `Uninstall VR mod.cmd`.
+5. The release zip holds `version.dll` at its top level (so it lands next to `GoW.exe` when unpacked into the game
+   folder) and this `GOW_VR_MOD` folder.

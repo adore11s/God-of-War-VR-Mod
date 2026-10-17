@@ -13,6 +13,7 @@
 #include "../fp/walls.h"
 #include "../core/config.h"
 #include "../input/vrmap.h"
+#include "../input/turning.h"
 #include "../vr/xr.h"
 #include "../diag/crashlog.h"
 #include <cmath>
@@ -175,6 +176,7 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
     const float dt = (float)fmin(fmax(now - g_cs.lastT, 0.001), 0.1);
     g_cs.lastT = now;
     if (!active || !g_cs.init) {
+        input::SnapTakeSteps();  // (pushes outside gameplay first person do nothing)
         g_cs.renderYaw = g_cs.camPrev = camYaw;
         g_cs.pitchPrev = camPitch;
         g_cs.hmdPrev = hmdYaw;
@@ -189,7 +191,18 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
     const float hmdRate = fabsf(WrapPi(hmdYaw - g_cs.hmdPrev)) / dt * 57.2958f;  // deg/s of the physical head
     g_cs.hmdPrev = hmdYaw;
     const vr::InputSnapshot in = vr::XrInput();
-    const float rx = in.hand[1].stick[0], ry = in.hand[1].stick[1];
+    // snap turning (input/turning.cpp, the VR settings panel): a push turns the view's own yaw at once - and the drawn
+    // body with it - the way the stick turns the camera in smooth turning (camsync_sign); the game camera is left alone,
+    // and the stick's X is not "the player turns" then (the view does not follow the camera's own swings)
+    const bool snap = input::SnapMode();
+    if (const int n = input::SnapTakeSteps()) {
+        const float dy = (g_cs.sign != 0.f ? g_cs.sign : -1.f) * (float)n * input::SnapStepRad();
+        g_cs.renderYaw = WrapPi(g_cs.renderYaw + dy);
+        fp::BodySnapYaw(dy);
+        static int snapLogs = 0;
+        if (snapLogs++ < 5) Log("turning: snap %+d x %.0f deg (view and body turned %.0f deg)", n, input::SnapStepRad() * 57.2958f, dy * 57.2958f);
+    }
+    const float rx = snap ? 0.f : in.hand[1].stick[0], ry = in.hand[1].stick[1];
     g_cs.stickHeld = g_cs.stickHeld ? (fabsf(rx) > 0.05f || fabsf(ry) > 0.05f) : (fabsf(rx) > 0.15f || fabsf(ry) > 0.15f);
     if (g_cs.stickHeld || fabsf(d) > 0.35f) {  // the player turns (or a quick turn / cut): the view turns with it
         if (fabsf(rx) > 0.05f || fabsf(d) > 0.35f) g_cs.renderYaw = WrapPi(g_cs.renderYaw + d);
@@ -340,10 +353,12 @@ void UiScaleView(uint8_t* view) {
     if (s <= 0.05f || fabsf(s - 1.f) < 1e-3f) return;
     float* VP = (float*)(view + 0x50);
     float* iP = (float*)(view + 0x190);
+    // the headset's vertical stretch undone (UiVerticalFix; the orthographic P gives the UI's width / height)
+    const float sy = s * UiVerticalFix(fabsf(P[0]) > 1e-9f ? fabsf(P[5] / P[0]) : 0.f);
     for (int r = 0; r < 4; ++r) {
-        P[r * 4 + 0] *= s; P[r * 4 + 1] *= s;
-        VP[r * 4 + 0] *= s; VP[r * 4 + 1] *= s;
-        iP[r] /= s; iP[4 + r] /= s;
+        P[r * 4 + 0] *= s; P[r * 4 + 1] *= sy;
+        VP[r * 4 + 0] *= s; VP[r * 4 + 1] *= sy;
+        iP[r] /= s; iP[4 + r] /= sy;
     }
     const Mat4 vp = Load(view + 0x1d0);
     const Mat4 a = Mul(Load(view + 0x50), vp), b = Mul(Load(view + 0xd0), vp);
@@ -1036,6 +1051,8 @@ bool HeadCameraForUi(Mat4* camToWorld, float* tanX, float* tanY) {
     return ok;
 }
 
+bool PauseMenuOpen() { return g_lastPause; }
+
 void UiDiagText(char* out, size_t n) {
     sprintf_s(out, n,
               "UI view updates %llu: scaled %llu, by the sharp HUD %llu, skipped (head camera off / 2D screen) %llu, "
@@ -1045,6 +1062,18 @@ void UiDiagText(char* out, size_t n) {
               (unsigned long long)g_uiSkipCam, (unsigned long long)g_uiSkipPersp, g_screen2D.load() ? "ON" : "off",
               g_screen2DMode, g_lastPause ? 1 : 0, g_lastVideo ? 1 : 0, g_lastLoading ? 1 : 0, g_lastFaded ? 1 : 0,
               g_lastFadeA, g_headCamOn ? 1 : 0);
+}
+
+// The game lays its 2D UI out in square pixels of its frame, but each eye frame holds the eye frustum (tanX x tanY),
+// so in the headset the UI is stretched vertically by (tanY / tanX) * (width / height) - LIVE logs: PSVR2 at 3840x2130
+// 1.26, Quest 3 at 2560x1600 1.66 (a tester: "the apple of Idun pickup stretched the whole screen"); with the square
+// picture (frame/rendersize) PSVR2 0.70 (owner: "the HUD is a bit squashed on the y axis"), Quest 3 1.04. The UI's
+// vertical scale is divided by it. gowvr.ini ui_aspect_fix=0 turns it off.
+float UiVerticalFix(float frameAspect) {
+    static const bool on = config::GetFloat("ui_aspect_fix", 1.f) > 0.5f;
+    if (!on || frameAspect <= 0.f || g_fovTan[0] <= 0.f || g_fovTan[1] <= 0.f) return 1.f;
+    const float stretch = g_fovTan[1] / g_fovTan[0] * frameAspect;
+    return fminf(fmaxf(1.f / stretch, 0.3f), 3.f);
 }
 
 float UiScaleCurrent() {

@@ -5,6 +5,7 @@
 //   g:142d4e5e0+10   *(static global) + offset (offset hex)
 // Commands: watch <slot> <expr> <len> <w|rw> | unwatch | report | wait <ms> | dump <expr> <nfloats> | echo <text>
 #include "cmd.h"
+#include <atomic>
 #include "../core/addr.h"
 #include "watch.h"
 #include "rdoc.h"
@@ -223,6 +224,9 @@ bool ExecuteCombat(const char* verb, const char* a, const char* b, int got) {
     }
     return true;
 }
+
+// the VR settings panel's VR on / off (RequestVr): 0 none, 1 on, 2 off - the command thread runs it like F9
+std::atomic<int> g_vrRequest{0};
 
 void Execute(const std::string& line) {
     char verb[32] = {}, a[64] = {}, b[64] = {}, c[64] = {}, d[64] = {};
@@ -677,6 +681,11 @@ DWORD WINAPI Poll(void*) {
             vrOn = !vrOn;
             Execute(vrOn ? "vr on" : "vr off");
         }
+        if (const int req = g_vrRequest.exchange(0)) {  // the VR settings panel (F9's own state follows it)
+            vrOn = req == 1;
+            Log("cmd: VR %s from the VR settings panel", vrOn ? "on" : "off");
+            Execute(vrOn ? "vr on" : "vr off");
+        }
         f8 = k8;
         f9 = k9;
         if (tick % 10 == 0) {
@@ -705,5 +714,7 @@ void StartCommandChannel() {
     g_base = (uintptr_t)GetModuleHandleW(nullptr);
     if (HANDLE h = CreateThread(nullptr, 0, Poll, nullptr, 0, nullptr)) CloseHandle(h);
 }
+
+void RequestVr(bool on) { g_vrRequest = on ? 1 : 2; }
 
 }  // namespace gowvr::diag

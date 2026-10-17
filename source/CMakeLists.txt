@@ -15,6 +15,22 @@ if(NOT GOWVR_GIT)
   set(GOWVR_GIT "nogit")
 endif()
 
+# The release's default gowvr.ini, built into the DLL: the mod writes it next to GoW.exe on its first start, so no
+# launcher is needed (owner 2026-10-17). It is files/gowvr.ini of the release folder (public source: ../files, the
+# developer's tree: ../GOW_VR_MOD/files); none found = an empty default (the mod's built-in values).
+set(GOWVR_DEFAULT_INI "")
+foreach(p "${CMAKE_CURRENT_SOURCE_DIR}/../files/gowvr.ini" "${CMAKE_CURRENT_SOURCE_DIR}/../GOW_VR_MOD/files/gowvr.ini")
+  if(NOT GOWVR_DEFAULT_INI AND EXISTS "${p}")
+    set(GOWVR_DEFAULT_INI "${p}")
+  endif()
+endforeach()
+set(GOWVR_INI_TEXT "")
+if(GOWVR_DEFAULT_INI)
+  file(READ "${GOWVR_DEFAULT_INI}" GOWVR_INI_TEXT)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOWVR_DEFAULT_INI}")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gen/default_ini.inc" "R\"GOWVRINI(${GOWVR_INI_TEXT})GOWVRINI\"\n")
+
 add_library(gowvr SHARED
   src/dllmain.cpp
   src/proxy/proxy.cpp
@@ -24,12 +40,14 @@ add_library(gowvr SHARED
   src/core/target.cpp
   src/core/patch.cpp
   src/frame/d3d_hooks.cpp
+  src/frame/rendersize.cpp
   src/diag/cmd.cpp
   src/diag/watch.cpp
   src/diag/crashlog.cpp
   src/diag/rdoc.cpp
   src/diag/shot.cpp
   src/input/vpad.cpp
+  src/input/turning.cpp
   src/core/detour.cpp
   src/core/addr.cpp
   src/stereo/mutate.cpp
@@ -51,12 +69,14 @@ add_library(gowvr SHARED
   src/core/config.cpp
   src/input/vrmap.cpp
   src/vr/xr.cpp
+  src/vr/panel.cpp
   src/diag/scan.cpp
   src/diag/cbprobe.cpp
   src/diag/stackprobe.cpp
   src/diag/stackprobe_thunk.asm
 )
 set_target_properties(gowvr PROPERTIES OUTPUT_NAME "version")
+target_include_directories(gowvr PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gen")  # default_ini.inc
 target_compile_definitions(gowvr PRIVATE GOWVR_VERSION="${GOWVR_GIT}" WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(gowvr PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
 target_link_libraries(gowvr PRIVATE d3d11 dxgi dxguid psapi bcrypt windowscodecs ole32)

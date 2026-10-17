@@ -6,7 +6,9 @@
 #include "core/target.h"
 #include "core/detour.h"
 #include "core/addr.h"
+#include "core/config.h"
 #include "frame/d3d_hooks.h"
+#include "frame/rendersize.h"
 #include "diag/cmd.h"
 #include "diag/crashlog.h"
 #include "stereo/lodprobe.h"
@@ -55,6 +57,15 @@ void OnAttach(bool staticLoad) {
                t.timeDateStamp, t.sizeOfImage, t.entryRva, t.headerMatch);
     if (HANDLE h = CreateThread(nullptr, 0, HashThread, nullptr, 0, nullptr)) CloseHandle(h);
 
+    // A fresh install without the launcher (owner 2026-10-17: "it just works when I start the game"): the release's
+    // default gowvr.ini (its learned weapon grips included) next to GoW.exe, before anything reads it
+    {
+        static const char kDefaultIni[] =
+#include "default_ini.inc"
+            ;
+        gowvr::config::CreateIfMissing(kDefaultIni);
+    }
+
     // D-187: the recorded Steam build as it is; any other build (Epic, an update, an unverified copy) only when every
     // address the mod uses was found again by its signature - otherwise nothing is patched
     gowvr::AddrInit(t.headerMatch);
@@ -72,6 +83,7 @@ void OnAttach(bool staticLoad) {
     gowvr::stereo::InstallLodHook();    // D-108
     gowvr::DetourEarlyInstall(false);
     gowvr::d3d::Install();
+    gowvr::frame::InstallRenderSize();  // square VR picture, small desktop window
     gowvr::input::InstallVirtualPad();
     gowvr::diag::StartCommandChannel();
     g_armed = true;

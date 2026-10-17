@@ -14,7 +14,9 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Your hands feel in the wrong place or don't move right?** Switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
 - **Don't use DLSS for now.** It makes every edge shimmer in the headset. Turn it off in the game's graphics settings.
-- **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
+- **Opening the menus:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**) for the game menu. **Hold** them for the settings menu.
+- **VR settings:** in the settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
+- **Your monitor shows a small square window while VR runs.** That is on purpose: the headset still gets the full picture.
 - **Equipping the axe:** reach over your **right shoulder** and press the **grip button**. After throwing the axe, recall it with the **right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
 - **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield.
 
@@ -31,7 +33,9 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Finger curling.** Hover your fingers over the grip buttons and Kratos' fingers curl.
 - **8D audio** in first person: sounds follow your head.
 - **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
-- **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (**F10 / F11**).
+- **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (set in the VR settings panel).
+- **Smooth or snap turning** in first person, set in the VR settings panel.
+- **A square VR picture** in the size you choose, whatever your monitor's resolution.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
 
 ## Before you install
@@ -42,18 +46,18 @@ Start the game normally once and, in its graphics settings:
 - turn the **frame rate limit** off,
 - set **Motion blur** to **0**,
 - turn **DLSS** off (it makes edges shimmer in VR),
-- set the **resolution** to **2K (2560 × 1440) or higher** for a good picture in the headset (monitor smaller than that? see *blurry picture* in [GUIDE.md](GUIDE.md#troubleshooting)).
+- turn **HDR** off,
+- set the **resolution** to **2K (2560 × 1440) or higher** for sharp menus in the headset (the 3D picture's size is set in the VR settings panel).
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
 
 ## Install
 
 1. Open your God of War folder. In Steam: right-click the game → **Manage** → **Browse local files**. In the Epic Games Launcher: the game's **⋯** menu → **Manage** → the folder icon. In GOG Galaxy: the game's settings icon → **Manage installation** → **Show folder**.
-2. Copy this whole **`GOW_VR_MOD`** folder into it.
-3. Start **SteamVR** (or your own OpenXR runtime, such as Virtual Desktop with **VDXR**) and put your headset on.
-4. Double-click **`Play God of War in VR.cmd`** in the `GOW_VR_MOD` folder.
+2. Copy **`version.dll`** into it, next to **`GoW.exe`** (it is in the release zip, or in `files` here). Copy the **`GOW_VR_MOD`** folder there too: it has the guide and the uninstaller.
+3. Put your headset on and start the game as usual, from Steam, Epic or GOG.
 
-VR turns on by itself as soon as the game starts. From then on you can also start the game straight from Steam, Epic or GOG; it stays in VR until you uninstall.
+VR turns on by itself as soon as the game starts, and SteamVR starts with it. Using Virtual Desktop (**VDXR**) or another OpenXR runtime instead? Connect your headset to it first. The mod's settings file (`gowvr.ini`) is created by itself the first time.
 
 ## Controls
 
@@ -61,16 +65,16 @@ VR turns on by itself as soon as the game starts. From then on you can also star
 |---|---|
 | **Right trigger next to your head** | First person on / off |
 | **Hold the right trigger next to your head** | First person in cutscenes |
-| **All four face buttons** | Open the menu |
+| **All four face buttons** | Game menu |
+| **All four face buttons (hold)** | Game settings + VR settings |
+| **Point a controller + trigger** (settings menu) | Change the VR settings on the panel next to the menu |
 | **F9** | VR off / on (play on your monitor, press again to go back to VR) |
-| **F10** | Xbox button prompts |
-| **F11** | PlayStation button prompts |
 
 ➡️ All controls, motion gestures, settings and fixes: **[GUIDE.md](GUIDE.md)**
 
 ## Uninstall
 
-Double-click **`Uninstall VR mod.cmd`**. It puts the game folder back as it was. **Your saves are never touched.**
+Double-click **`Uninstall VR mod.cmd`** in the `GOW_VR_MOD` folder. It puts the game folder back as it was. **Your saves are never touched.**
 
 ## Something went wrong?
 
@@ -80,7 +84,7 @@ Open an issue on the mod's GitHub page (**Issues** → **New issue**) with a few
 |---|---|
 | **The game crashed** | The newest **`crash_<date>.txt`** from **`gowvr_logs\crash_reports`** in your game folder |
 | **Something looks or works wrong, the game froze, or VR did not start** | **`gowvr_logs\gowvr.log`** from your game folder, right after quitting the game (if you have started the game again since, send **`gowvr.prev.log`** too) |
-| **The installer window showed an error** | A screenshot of the installer window |
+| **The uninstaller window showed an error** | A screenshot of that window |
 
 None of these files contain your user name or other personal information.
 

@@ -40,9 +40,8 @@ Set these in the game's graphics settings before you play:
 | Motion blur | 0 | It smears with every head movement |
 | DLSS (NVIDIA cards) | Off for now | It makes every edge shimmer in the headset |
 | Graphics preset | **Low**, or **Original** if your PC can handle it | VR draws the game twice, once per eye |
-| Resolution | **2K (2560 × 1440) or higher** | The headset picture is made from it |
-
-The installer also sets the frame rate limit, motion blur and HDR for you. It records your old values, and the uninstaller puts them back.
+| HDR | Off | The headset picture is made from the normal (SDR) picture |
+| Resolution | **2K (2560 × 1440) or higher** | The menu screen in the headset uses it (the 3D picture's size is the VR picture size, see below) |
 
 Also recommended:
 
@@ -51,7 +50,7 @@ Also recommended:
 | Film grain | 0 (it reads as noise in a headset) |
 | Display mode | Windowed or Borderless (both fine) |
 
-**Never started God of War before?** Its settings file does not exist yet. Leave the installer window open, play, and quit the game; the settings are applied as you exit.
+**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (settings menu: hold the four face buttons) or as `render_size` in `gowvr.ini`. Bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
 
 ---
 
@@ -86,7 +85,7 @@ These work while the game window or a SteamVR window is in front.
 | Both stick clicks together | Spartan Rage |
 | Right trigger **next to your head** | First person on / off; **hold** it there for first person in cutscenes |
 
-**Pause menu:** press all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △). On Valve Index you can also squeeze the trackpads.
+**Menus:** press all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for the game menu (map, skills, inventory); **hold** them for the settings menu, where the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
 
 ### First person: motion controls
 
@@ -113,7 +112,7 @@ These work while the game window or a SteamVR window is in front.
 `gowvr.ini` sits next to `GoW.exe`.
 - Every setting has a short note explaining it.
 - Changes you save while the game runs are picked up.
-- The installer never overwrites your copy.
+- The mod creates it the first time the game starts, and never overwrites it.
 - The mod also stores things it learns there, such as the weapon grips. Leave keys you don't know alone.
 
 Most useful settings:
@@ -126,6 +125,10 @@ Most useful settings:
 | `rumble_strength` | 1.0 | Controller rumble strength (0 = off) |
 | `hide_body` | 0 | 1 = only the arms in first person (F7) |
 | `screen_dist` / `screen_width` | 2.2 / 3.4 | Distance and size of the floating screen, in metres |
+| `render_size` | 2048 | VR picture size per eye (square), 0 = the game's own resolution |
+| `turn_snap` / `turn_speed` / `snap_turn_degrees` | 0 / 1.0 / 45 | First-person turning: smooth at a speed, or snap turns |
+| `walls_f1` | 1 | 0 = no wall collision in first person |
+| `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
 
 ---
 
@@ -133,14 +136,14 @@ Most useful settings:
 
 Nothing in the game is replaced or patched on disk.
 - The mod is one file, `version.dll`, next to `GoW.exe`. Windows loads it into the game when it starts.
-- If another mod's `version.dll` is already there, the installer stops and leaves it alone.
+- Another mod's `version.dll` in the same place would be replaced, so check first if you use other mods.
 
 | File / folder | What it is |
 |---|---|
 | `version.dll` | The mod |
 | `gowvr.ini` | The mod's settings |
 | `gowvr_logs\` | The mod's log (`gowvr.log`) and crash reports (`crash_reports\`) |
-| `settings.ini` | The game's settings: three values changed (see above), restored by the uninstaller |
+| `settings.ini` | The game's own settings: only what you change in the game (an older version's launcher changed three of them; the uninstaller puts those back) |
 
 ---
 
@@ -151,13 +154,13 @@ Nothing in the game is replaced or patched on disk.
 - Open `gowvr_logs\gowvr.log` in the game folder: `xr: setup failed` means SteamVR did not answer. The mod keeps trying every 3 seconds.
 
 **Playing with Virtual Desktop (VDXR), Meta / Oculus or another OpenXR runtime instead of SteamVR**
-- The mod uses the active OpenXR runtime, and the launcher only starts SteamVR when SteamVR is that runtime.
+- The mod uses the active OpenXR runtime; SteamVR is only started when it is that runtime.
 - Virtual Desktop: in the Streamer app set the OpenXR runtime to **VDXR**, connect the headset, then start the game.
 - To use a runtime for this game only, without changing your PC's default: set the `XR_RUNTIME_JSON` environment variable to that runtime's `.json` file.
 
 **The picture in the headset is blurry or low resolution**
-- The headset picture is made from the game's resolution. In Windowed mode the game can't go above your monitor's resolution.
-- Monitor below 2K (2560 × 1440)? Turn on **NVIDIA DSR** (NVIDIA Control Panel → Manage 3D settings → DSR - Factors) or **AMD Virtual Super Resolution** (AMD Software → Display). Then pick the higher resolution in the game.
+- Raise the **VR picture size** in the VR settings panel (settings menu), for example to 2560 or 2816.
+- Blurry menus only? The menu screen uses the game's own resolution: set it to 2K or higher. Monitor smaller than that? Turn on **NVIDIA DSR** (NVIDIA Control Panel → Manage 3D settings → DSR - Factors) or **AMD Virtual Super Resolution** (AMD Software → Display), then pick the higher resolution in the game.
 - Virtual Desktop: also raise its **VR Graphics Quality** (e.g. Ultra or Godlike).
 
 **Menus, videos or the HUD look too big**

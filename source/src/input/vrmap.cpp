@@ -12,6 +12,8 @@
 #include "../fp/arms.h"
 #include "../stereo/mutate.h"
 #include "vpad.h"
+#include "turning.h"
+#include "../vr/panel.h"
 #include <windows.h>
 #include <xinput.h>
 #include <atomic>
@@ -954,7 +956,11 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         if (L.trackpadForce > 0.6f) g->wButtons |= XINPUT_GAMEPAD_START;   // options
     }
     if (R.active) {
-        Stick(R.stick, 0.15f, &g->sThumbRX, &g->sThumbRY);
+        // F1 gameplay: smooth turning at turn_speed, or snap turning (turning.cpp; the VR settings panel)
+        const bool f1Turn = fp::FpMode() == 1 && !plain;
+        float rs[2] = {R.stick[0], R.stick[1]};
+        if (f1Turn) rs[0] = input::TurnStickX(R.stick[0]);
+        Stick(rs, 0.15f, &g->sThumbRX, &g->sThumbRY);
         if (fabsf(R.stick[0]) < 0.15f && fabsf(R.stick[1]) < 0.15f) {  // camera steering only while the player is off it
             g->sThumbRX = Axis(g_camSyncX.load());
             g->sThumbRY = Axis(g_camSyncY.load());
@@ -1045,21 +1051,53 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     // triggers the Options button; the PSVR2 Sense controllers don't have it"): all four face buttons held = Options
     // (Start) for as long as they are; the face buttons themselves go nowhere from then until all four are released (no
     // jump / dodge / Atreus / recall from the chord). (The Index trackpad press stays Options too.)
+    // Owner 2026-10-17: a TAP of the four opens the game menu (map, skills, inventory: View / touchpad), HOLDING them
+    // (chord_hold_ms, 600) the screen the keyboard's Esc opens (owner: "when you hold it it goes to the screen when you
+    // press Esc" - not Options' screen): Esc is posted to the game window, released 0.1 s later. The tap is sent when the
+    // four are released, as a short press of View.
     {
-        static bool chordOn = false;
+        static bool chordOn = false, holdSent = false;
+        static ULONGLONG chordSince = 0, pulseUntil = 0, escUpAt = 0;
+        if (escUpAt && now >= escUpAt) {
+            escUpAt = 0;
+            PostKeyEdge(VK_ESCAPE, false);
+        }
+        static WORD pulse = 0;
+        static const ULONGLONG holdMs = (ULONGLONG)fmaxf(config::GetFloat("chord_hold_ms", 600.f), 100.f);
         const bool all4 = L.active && R.active && L.a && L.b && R.a && R.b;
         if (all4 && !chordOn) {
             chordOn = true;
-            Log("vrmap: all four face buttons -> Options");
+            holdSent = false;
+            chordSince = now;
         }
         if (chordOn) {
-            if (!L.a && !L.b && !R.a && !R.b) chordOn = false;
-            else {
+            if (!L.a && !L.b && !R.a && !R.b) {
+                chordOn = false;
+                if (!holdSent) {
+                    pulse = XINPUT_GAMEPAD_BACK;
+                    pulseUntil = now + 120;
+                    Log("vrmap: all four face buttons tapped -> the game menu (View / touchpad)");
+                }
+            } else {
                 g->wButtons &= (WORD)~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y);
-                if (all4) g->wButtons |= XINPUT_GAMEPAD_START;
+                if (!holdSent && all4 && now - chordSince >= holdMs) {
+                    holdSent = true;
+                    if (PostKeyEdge(VK_ESCAPE, true)) {
+                        escUpAt = now + 100;
+                        Log("vrmap: all four face buttons held -> Esc (the game's Esc screen)");
+                    } else {  // no game window found: Options as before
+                        pulse = XINPUT_GAMEPAD_START;
+                        pulseUntil = now + 150;
+                        Log("vrmap: all four face buttons held -> Options (no game window for Esc)");
+                    }
+                }
             }
         }
+        if (now < pulseUntil) g->wButtons |= pulse;
     }
+    // the VR settings panel: a hand pointing at it clicks with its trigger - not the game's L2 / R2 then
+    if (vr::PanelCapturesTrigger(0)) g->bLeftTrigger = 0;
+    if (vr::PanelCapturesTrigger(1)) g->bRightTrigger = 0;
     return true;
 }
 

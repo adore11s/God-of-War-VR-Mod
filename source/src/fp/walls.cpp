@@ -46,8 +46,8 @@ uint64_t g_casts = 0, g_hits = 0, g_clampHead = 0, g_clampHand = 0, g_anomaly = 
 double g_costUs = 0.0;
 
 bool Enabled() {
-    static const bool on = config::GetFloat("walls_f1", 1.f) > 0.5f;
-    return on && !g_dead.load();
+    // read each time: the VR settings panel switches it (gowvr.ini walls_f1)
+    return config::GetFloat("walls_f1", 1.f) > 0.5f && !g_dead.load();
 }
 
 bool GameThreadReady() {

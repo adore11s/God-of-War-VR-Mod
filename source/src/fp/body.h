@@ -84,6 +84,8 @@ void SetBodyPivot(float right, float back);
 void SetBodyEyeShift(float right, float back);
 void BodyPivot(float* right, float* back);  // the eye pivot in the game object's frame (right, back)
 float ViewYaw();
+// a snap turn: the drawn body turns by `delta` (radians, the view yaw's sense) at once (mutate.cpp CamSync)
+void BodySnapYaw(float delta);
 bool HeroMoving();                          // D-072: Kratos (drawn) moved within the last ~20 frames                            // the latest F1 view yaw (back-row convention, like the game root yaw)
 // diagnostic (read-only): where does the hero object keep its facing? Logs every float triplet / quaternion in the
 // hero object and the blocks it points to that match the root joint's axes, position or yaw.

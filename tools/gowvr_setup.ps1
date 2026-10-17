@@ -139,6 +139,41 @@ function Get-IniValue([string[]]$lines, [string]$key) {
     return $null
 }
 
+# The VR picture size, asked on every Play (just Enter keeps the current choice): while VR runs the game draws a square
+# picture of this many pixels per side for each eye, whatever the monitor's resolution (gowvr.ini render_size)
+$RenderSizes = @(1440, 1728, 2048, 2304, 2560, 2816)
+$RenderNotes = @('fastest', '', 'recommended', '', '', 'sharpest')
+function Select-VrPictureSize([string]$iniPath) {
+    $ini = Read-Ini $iniPath
+    $current = Get-IniValue $ini.Lines 'render_size'
+    $keep = '2048'
+    $cur = 0
+    if ($current -and [int]::TryParse($current, [ref]$cur) -and $cur -ge 512) { $keep = "$cur" }
+    Write-Host ''
+    Say 'VR picture size: a square picture for each eye, in pixels.'
+    Say 'Bigger = sharper, but it needs a faster graphics card.'
+    for ($i = 0; $i -lt $RenderSizes.Count; $i++) {
+        $note = ''
+        if ($RenderNotes[$i]) { $note = '   (' + $RenderNotes[$i] + ')' }
+        Write-Host ('     {0}. {1} x {1}{2}' -f ($i + 1), $RenderSizes[$i], $note)
+    }
+    $a = "$(Read-Host "   Type 1-6 and press Enter (just Enter keeps $keep x $keep)")".Trim()
+    $size = $keep
+    if ($a) {
+        $n = 0
+        if ([int]::TryParse($a, [ref]$n) -and $n -ge 1 -and $n -le $RenderSizes.Count) { $size = "$($RenderSizes[$n - 1])" }
+        else { Warn "'$a' is not 1-6: keeping $keep x $keep" }
+    }
+    $lines = $ini.Lines
+    if ($null -eq (Set-IniValue ([ref]$lines) 'render_size' $size)) {
+        $at = $ini.Lines.Count
+        if ($at -gt 0 -and $ini.Lines[$at - 1] -eq '') { $at-- }  # before the file's last line end
+        $ini.Lines.Insert($at, "render_size=$size")
+    }
+    Write-Ini $iniPath $ini
+    Say "VR picture size: $size x $size (while VR runs the game window on your monitor is a small square)"
+}
+
 function Read-Ini([string]$path) {
     $raw = [IO.File]::ReadAllText($path)
     $nl = "`n"; if ($raw.Contains("`r`n")) { $nl = "`r`n" }
@@ -304,6 +339,7 @@ if ($Mode -eq 'Play') {
     } else {
         Say 'gowvr.ini: your VR settings kept'
     }
+    Select-VrPictureSize $ini
 
     $settingsDone = Apply-Settings $game
     if (-not $settingsDone) {

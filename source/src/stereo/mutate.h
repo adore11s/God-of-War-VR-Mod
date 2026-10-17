@@ -49,6 +49,11 @@ void UiScale(float s);
 void UiScaleFp(float s);  // D-102: UI scale in F1 / F3 (ui_scale_fp)
 // D-107: while head-aiming (+400 ms) - the game reticle's UI spot / radius and where the HUD draws it (UI uv)
 bool AimReticleDisplay(float* srcU, float* srcV, float* srcR, float* dstU, float* dstV);
+// The UI's extra vertical scale that undoes the headset's vertical stretch of the game's 2D UI (frame width / height in;
+// 1 = none: VR eye frustum not set, or gowvr.ini ui_aspect_fix=0)
+float UiVerticalFix(float frameAspect);
+// The game's pause menu is open (its inPauseMenu byte, latched at view A's update) - the VR settings panel shows then
+bool PauseMenuOpen();
 // VR check line (log): UI view updates scaled / skipped and why, and the flat 2D screen's state and signals
 void UiDiagText(char* out, size_t n);
 float UiScaleCurrent();   // D-104: the sharp HUD scale now (ui_scale / ui_scale_fp in F1 F3; "uiscale", "uiscalefp")

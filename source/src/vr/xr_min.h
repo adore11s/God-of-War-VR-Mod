@@ -245,7 +245,7 @@ struct XrEventDataReferenceSpaceChangePending {  // D-079
     uint32_t poseValid; XrPosef poseInPreviousSpace;
 };
 // D-083: the flat game screen floating in the dark (2D-only game screens)
-enum XrEyeVisibility : int32_t { XR_EYE_VISIBILITY_BOTH = 0 };
+enum XrEyeVisibility : int32_t { XR_EYE_VISIBILITY_BOTH = 0, XR_EYE_VISIBILITY_LEFT = 1, XR_EYE_VISIBILITY_RIGHT = 2 };
 struct XrExtent2Df { float width, height; };
 struct XrCompositionLayerQuad {
     XrStructureType type; const void* next; XrFlags64 layerFlags; XrSpace space; XrEyeVisibility eyeVisibility;

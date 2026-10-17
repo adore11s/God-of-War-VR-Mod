@@ -25,6 +25,8 @@ void FocusOverride(bool on);
 void FocusKeepAlive();  // re-assert window activation (command thread, 1 Hz)
 // Keyboard fallback for menus: WM_KEYDOWN/WM_KEYUP posted to the game window.
 void PostKey(int vk, int ms);
+// The same, one edge (key down or up) without waiting - for the pad thread (the four-face-button hold = Esc)
+bool PostKeyEdge(int vk, bool down);
 
 // D-111: which pad the game sees - 0 Xbox (XInput user 0, F10), 1 PlayStation (the game's own PlayStation pad through
 // libScePad, F11: PlayStation button prompts). Saved in gowvr.ini pad_mode. The game's rumble (either pad) goes to the

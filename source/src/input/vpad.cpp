@@ -468,6 +468,14 @@ void PostKey(int vk, int ms) {
     PostMessageW(g_gameWindow, WM_KEYUP, (WPARAM)vk, 1 | (sc << 16) | (1u << 30) | (1u << 31));
 }
 
+bool PostKeyEdge(int vk, bool down) {
+    HWND w = g_gameWindow.load();
+    if (!w) return false;
+    const UINT sc = MapVirtualKeyW((UINT)vk, MAPVK_VK_TO_VSC);
+    const LPARAM lp = (LPARAM)(1u | (sc << 16) | (down ? 0u : (1u << 30) | (1u << 31)));
+    return PostMessageW(w, down ? WM_KEYDOWN : WM_KEYUP, (WPARAM)vk, lp) != 0;
+}
+
 // The game keeps its own "active" state from window activation and drops input while inactive; while the override
 // is on, re-assert activation (called once per second from the command thread).
 void FocusKeepAlive() {

@@ -8,6 +8,7 @@
 #include "../diag/crashlog.h"
 #include "../input/vpad.h"
 #include "../stereo/eyes.h"
+#include "rendersize.h"
 #include "../stereo/sharpui.h"
 #include "../stereo/dlsseyes.h"
 #include "../stereo/taaeyes.h"
@@ -154,6 +155,7 @@ void VrOnPresent(IDXGISwapChain* sc, UINT& sync) {
     bool pair = !g_xrMono && stereo::EyesPair(&e0, &e1, &v);
     vr::XrOnPresent(sc, pair ? e0 : nullptr, pair ? e1 : nullptr, pair && v.valid ? &v : nullptr);
     if (vr::XrRunning()) sync = 0;
+    frame::RenderSizeTick(sc, vr::XrRunning());  // square VR picture while VR runs
 }
 
 // D-104: the frame's last HUD (eye 1, or the only one with the eye capture off) pasted in before it is copied / shown

@@ -10,6 +10,9 @@ namespace gowvr::config {
 float GetFloat(const char* key, float def);
 // D-110 (code audit M8): written to gowvr.ini.tmp and moved over gowvr.ini - a crash mid-write no longer empties it.
 void SetFloat(const char* key, float value);
+// DllMain, before the first read: gowvr.ini does not exist yet (a fresh install) - write `text` (the release's default
+// file, built into the DLL). Returns true when it wrote it.
+bool CreateIfMissing(const char* text);
 // Several keys in ONE write (the learned grips: 13 values).
 void SetFloats(const std::vector<std::pair<const char*, float>>& values);
 

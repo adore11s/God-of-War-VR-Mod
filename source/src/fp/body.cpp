@@ -326,6 +326,13 @@ void BodyPivot(float* right, float* back) {
 std::atomic<bool> g_stanceComp{true};
 void StanceComp(bool on) { g_stanceComp = on; Log("fp: body turned by the stance twist (chest faces the view) %s", on ? "ON" : "OFF"); }
 
+// a snap turn (mutate.cpp CamSync): the drawn body turns by the same step at once, not eased after the view
+std::atomic<float> g_bodySnap{0.f};
+void BodySnapYaw(float delta) {
+    float cur = g_bodySnap.load();
+    while (!g_bodySnap.compare_exchange_weak(cur, cur + delta)) {}
+}
+
 void BodyFollowYaw(float viewYaw, bool active, bool aiming) {
     static LARGE_INTEGER freq{}, last{};
     if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
@@ -341,6 +348,7 @@ void BodyFollowYaw(float viewYaw, bool active, bool aiming) {
     const float game = g_gameRootYaw.load();
     if (!active && !g_bodyOverride.load()) { have = false; return; }
     if (!have) { yaw = game; have = true; }
+    if (const float sn = g_bodySnap.exchange(0.f); sn != 0.f && active) yaw = WrapPiB(yaw + sn);
     g_viewYawLatest = viewYaw;
     vr::InputSnapshot in = vr::XrInput();
     const float lx = in.hand[0].stick[0], ly = in.hand[0].stick[1];
