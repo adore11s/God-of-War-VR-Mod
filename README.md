@@ -17,8 +17,8 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Don't use DLSS for now.** It makes every edge shimmer in the headset. Turn it off in the game's graphics settings.
 - **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
 - **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
-- **Equipping the axe:** reach over your **right shoulder** with your **left hand** and press its **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
-- **Equipping the Blades of Chaos:** reach over your **left shoulder** with your **right hand** and press its **grip button**.
+- **Equipping the axe:** reach over your **right shoulder** with **either hand** and press that hand's **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
+- **Equipping the Blades of Chaos:** reach over your **left shoulder** with **either hand** and press that hand's **grip button**.
 - **Finishers:** face the enemy directly in front of you. A finisher from behind the enemy doesn't work.
 - **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the **right grip lightly** to make fists with both hands. The left grip is only the shield.
 
@@ -28,10 +28,10 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **First person** in normal gameplay and in cutscenes. You can see your whole body.
 - **Motion controls in first person:**
   - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists.
-  - **Leviathan Axe:** light attacks, throwing and recalling. Equip it by reaching over your right shoulder with your left hand.
+  - **Leviathan Axe:** light attacks, throwing and recalling. Equip it by reaching over your right shoulder with either hand.
   - **Shield:** press the left grip to defend yourself.
   - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
-  - **Blades of Chaos:** light attacks (more attacks are on the way). Equip them by reaching over your left shoulder with your right hand.
+  - **Blades of Chaos:** light attacks (more attacks are on the way). Equip them by reaching over your left shoulder with either hand.
 - **Finger curling.** Hover your fingers over the grip buttons and Kratos' fingers curl.
 - **8D audio** in first person: sounds follow your head.
 - **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
