@@ -38,7 +38,7 @@ Set these in the game's graphics settings before you play:
 | VSync | Off | The headset sets the pace; VSync to your monitor holds VR back |
 | Frame rate limit | Off | A cap below the headset's refresh rate makes VR judder |
 | Motion blur | 0 | It smears with every head movement |
-| DLSS (NVIDIA RTX cards) | **Quality** | Recommended: sharp, stable edges and better performance |
+| DLSS (NVIDIA cards) | **On** | Recommended: sharp, stable edges and better performance |
 | Graphics preset | **Low**, or **Original** if your PC can handle it | VR draws the game twice, once per eye |
 | HDR | Off | The headset picture is made from the normal (SDR) picture |
 

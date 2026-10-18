@@ -15,7 +15,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
 - **Your hands feel in the wrong place or don't move right, or you can't see a button prompt in first person?** Quickly switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
-- **Use DLSS (NVIDIA RTX cards).** It now works properly in VR: sharp, stable edges and better performance. In the game's graphics settings set **DLSS** to **Quality**.
+- **Turn on DLSS if you have an NVIDIA graphics card.** It now works properly in VR: sharp, stable edges and better performance.
 - **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
 - **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision, the VR picture size and the finishers perspective. Point a controller at an option and pull its trigger.
 - **Equipping the axe:** reach over your **right shoulder** with **either hand** and press that hand's **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
@@ -51,7 +51,7 @@ Start the game normally once and, in its graphics settings:
 - turn **VSync** off,
 - turn the **frame rate limit** off,
 - set **Motion blur** to **0**,
-- set **DLSS** to **Quality** (NVIDIA RTX cards; recommended),
+- turn **DLSS** on if you have an NVIDIA graphics card (recommended),
 - turn **HDR** off.
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
