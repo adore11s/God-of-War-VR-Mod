@@ -145,7 +145,7 @@ int Reversals(const Swing& s, ULONGLONG now, ULONGLONG windowMs) {
     return n;
 }
 
-bool OverShoulder(const vr::HandState& H, float* behindOut = nullptr, float* upOut = nullptr);
+bool OverShoulder(const vr::HandState& H, float* behindOut = nullptr, float* upOut = nullptr, float* rightOut = nullptr);
 
 // ---- D-062 combat rework (owner attack review 2026-09-30, docs/F1_ATTACK_REVIEW.md) ----
 // Attack gate: every attack press waits until the previous attack / evade has ended (plus combo_gap_ms) so the game
@@ -623,10 +623,28 @@ WORD ActionButton(int action, BYTE* lt, BYTE* rt) {
 Draw g_draw;
 std::atomic<uint64_t> g_draws{0};
 
-void UpdateDraw(const vr::HandState& R, bool gripHeld, XINPUT_GAMEPAD* g, ULONGLONG now) {
+// Owner 2026-10-18: cross-body draws - the LEFT hand over the RIGHT shoulder equips / puts away the axe, the RIGHT hand
+// over the LEFT shoulder the Blades (UpdateBladesDraw). A draw needs the hand behind the head (OverShoulder) and at or
+// past the head's middle toward that shoulder. The right grip still recalls the thrown axe - not while it reaches over
+// the left shoulder for the Blades.
+bool g_prevGripL = false;
+bool RightForBlades(const vr::HandState& R, float* behind, float* up) {
+    float right = 0.f;
+    return OverShoulder(R, behind, up, &right) && right < 0.05f;
+}
+bool LeftForAxe(const vr::HandState& L, float* behind, float* up) {
+    float right = 0.f;
+    return OverShoulder(L, behind, up, &right) && right > -0.05f;
+}
+
+void UpdateDraw(const vr::HandState& R, const vr::HandState& L, bool gripHeld, bool gripHeldL, XINPUT_GAMEPAD* g,
+                ULONGLONG now) {
     const bool edge = gripHeld && !g_draw.prevGrip;
     g_draw.prevGrip = gripHeld;
-    if (edge && now >= g_draw.cooldownUntil && fp::AxeThrown()) {
+    const bool edgeL = gripHeldL && !g_prevGripL;
+    g_prevGripL = gripHeldL;
+    float rb = 0.f, ru = 0.f;
+    if (edge && now >= g_draw.cooldownUntil && fp::AxeThrown() && !RightForBlades(R, &rb, &ru)) {
         // owner: with the axe thrown, the right grip calls it back (same as the left controller's recall button)
         BYTE lt = 0, rt = 0;
         fp::AxeRequest(true);
@@ -636,46 +654,34 @@ void UpdateDraw(const vr::HandState& R, bool gripHeld, XINPUT_GAMEPAD* g, ULONGL
         g_draw.cooldownUntil = now + 600;
         vr::XrHaptic(1, 0.5f, 0.06f);
         Log("vrmap: right grip with the axe thrown -> recall (pad buttons 0x%04x)", g_draw.button);
-    } else if (edge && now >= g_draw.cooldownUntil && R.gripValid) {
-        vr::EyeViews v = vr::XrLatestViews();
-        if (v.valid) {
-            float head[3], d[3];
-            for (int i = 0; i < 3; ++i) head[i] = 0.5f * (v.pose[0].p[i] + v.pose[1].p[i]);
-            for (int i = 0; i < 3; ++i) d[i] = R.grip.p[i] - head[i];
-            const float* q = v.pose[0].q;  // x y z w; view forward = -Z
-            float fx = -2.f * (q[0] * q[2] + q[3] * q[1]), fz = -(1.f - 2.f * (q[0] * q[0] + q[1] * q[1]));
-            float n = sqrtf(fx * fx + fz * fz);
-            if (n > 1e-3f) {
-                fx /= n; fz /= n;
-                float behind = -(d[0] * fx + d[2] * fz);  // metres behind the face plane (horizontal)
-                float up = d[1];                           // metres above the eyes
-                if (behind > 0.02f && up > -0.35f) {
-                    // the real state: is the axe on the hand (attachment check in fp/body.cpp)?
-                    g_draw.drawn = !fp::AxeInHand();
-                    // draw = the game's axe recall (owner: "call the recall function of the axe"); put away = the
-                    // game's own Sheathe binding
-                    BYTE lt = 0, rt = 0;
-                    // D-102 (owner: "when I reach over my back it needs to EQUIP the axe, not call it - the Blades equip
-                    // very well"): with the axe on the back the game's own Sheathe / draw binding (action 13, D-pad
-                    // right) - LIVE harness 2026-10-04: sheathed -> one press -> the axe drawn in the hand ~0.25 s later,
-                    // the game's equip; the recall (action 4) only while the Blades are out (it swaps them for the axe)
-                    const int action = g_draw.drawn ? (fp::CurrentWeapon() == 2 ? 4 : 13) : 13;
-                    fp::AxeRequest(g_draw.drawn);
-                    g_draw.button = ActionButton(action, &lt, &rt);
-                    g_draw.trig = (BYTE)((lt ? 1 : 0) | (rt ? 2 : 0));
-                    Log("vrmap: %s -> game action %d = pad buttons 0x%04x triggers %d (table byte %d)",
-                        g_draw.drawn ? "draw" : "put away", action, g_draw.button, g_draw.trig,
-                        (int)((uint8_t*)GameVa(0x142506658ull))[action]);
-                    g_draw.pressUntil = now + (g_draw.drawn ? 200 : 400);
-                    g_draw.cooldownUntil = now + 900;
-                    // bringing the hand forward with the axe is not an attack
-                    if (g_swing.cooldownUntil < now + 700) g_swing.cooldownUntil = now + 700;
-                    ++g_draws;
-                    vr::XrHaptic(1, 0.6f, 0.08f);
-                    Log("vrmap: over-shoulder grab -> %s axe (behind %.2f m, up %.2f m)", g_draw.drawn ? "draw" : "put away",
-                        behind, up);
-                }
-            }
+    } else if (edgeL && now >= g_draw.cooldownUntil) {
+        float behind = 0.f, up = 0.f;  // metres behind the face plane (horizontal) / above the eyes
+        if (LeftForAxe(L, &behind, &up)) {
+            // the real state: is the axe on the hand (attachment check in fp/body.cpp)?
+            g_draw.drawn = !fp::AxeInHand();
+            // draw = the game's axe recall (owner: "call the recall function of the axe"); put away = the game's own
+            // Sheathe binding
+            BYTE lt = 0, rt = 0;
+            // D-102 (owner: "when I reach over my back it needs to EQUIP the axe, not call it - the Blades equip very
+            // well"): with the axe on the back the game's own Sheathe / draw binding (action 13, D-pad right) - LIVE
+            // harness 2026-10-04: sheathed -> one press -> the axe drawn in the hand ~0.25 s later, the game's equip; the
+            // recall (action 4) only while the Blades are out (it swaps them for the axe)
+            const int action = g_draw.drawn ? (fp::CurrentWeapon() == 2 ? 4 : 13) : 13;
+            fp::AxeRequest(g_draw.drawn);
+            g_draw.button = ActionButton(action, &lt, &rt);
+            g_draw.trig = (BYTE)((lt ? 1 : 0) | (rt ? 2 : 0));
+            Log("vrmap: %s -> game action %d = pad buttons 0x%04x triggers %d (table byte %d)",
+                g_draw.drawn ? "draw" : "put away", action, g_draw.button, g_draw.trig,
+                (int)((uint8_t*)GameVa(0x142506658ull))[action]);
+            g_draw.pressUntil = now + (g_draw.drawn ? 200 : 400);
+            g_draw.cooldownUntil = now + 900;
+            // bringing the hands forward with the axe is not an attack
+            if (g_swing.cooldownUntil < now + 700) g_swing.cooldownUntil = now + 700;
+            if (g_swingL.cooldownUntil < now + 900) g_swingL.cooldownUntil = now + 900;
+            ++g_draws;
+            vr::XrHaptic(0, 0.6f, 0.08f);
+            Log("vrmap: left hand over the right shoulder -> %s axe (behind %.2f m, up %.2f m)",
+                g_draw.drawn ? "draw" : "put away", behind, up);
         }
     }
     if (now < g_draw.pressUntil) {
@@ -686,7 +692,7 @@ void UpdateDraw(const vr::HandState& R, bool gripHeld, XINPUT_GAMEPAD* g, ULONGL
 }
 // D-043: hand behind the head's face plane and not below the chest - the over-shoulder grab zone (same test as the
 // axe draw above), for either hand
-bool OverShoulder(const vr::HandState& H, float* behindOut, float* upOut) {
+bool OverShoulder(const vr::HandState& H, float* behindOut, float* upOut, float* rightOut) {
     if (!H.gripValid) return false;
     vr::EyeViews v = vr::XrLatestViews();
     if (!v.valid) return false;
@@ -701,19 +707,20 @@ bool OverShoulder(const vr::HandState& H, float* behindOut, float* upOut) {
     const float behind = -(d[0] * fx + d[2] * fz), up = d[1];
     if (behindOut) *behindOut = behind;
     if (upOut) *upOut = up;
+    if (rightOut) *rightOut = d[0] * -fz + d[2] * fx;  // to the head's right (its forward turned 90 deg)
     return behind > 0.02f && up > -0.35f;
 }
 
-// D-043 (owner): grab over the LEFT shoulder with the left grip = draw the Blades of Chaos (the game's Blades action,
-// default D-pad left), like the right-shoulder grab draws the axe. The current weapon comes from the game
+// D-043 (owner): grab over the LEFT shoulder = draw the Blades of Chaos (the game's Blades action, default D-pad left);
+// owner 2026-10-18: with the RIGHT hand (cross-body, see UpdateDraw). The current weapon comes from the game
 // (fp::CurrentWeapon, the hash GetCurrentWeapon compares), so nothing is guessed.
 struct BladesDraw { bool prevGrip = false; ULONGLONG pressUntil = 0, cooldownUntil = 0; WORD button = 0; BYTE trig = 0; };
 BladesDraw g_blades;
-void UpdateBladesDraw(const vr::HandState& L, bool gripHeld, XINPUT_GAMEPAD* g, ULONGLONG now) {
+void UpdateBladesDraw(const vr::HandState& R, bool gripHeld, XINPUT_GAMEPAD* g, ULONGLONG now) {
     const bool edge = gripHeld && !g_blades.prevGrip;
     g_blades.prevGrip = gripHeld;
     float behind = 0.f, up = 0.f;
-    if (edge && now >= g_blades.cooldownUntil && OverShoulder(L, &behind, &up)) {
+    if (edge && now >= g_blades.cooldownUntil && RightForBlades(R, &behind, &up)) {
         // D-044: a toggle like the axe grab - the game's Blades action draws them, and pressed again with the Blades in
         // hand puts them away (LIVE: Blades -> D-pad left -> Bare)
         const int w = fp::CurrentWeapon();
@@ -724,8 +731,8 @@ void UpdateBladesDraw(const vr::HandState& L, bool gripHeld, XINPUT_GAMEPAD* g, 
         g_blades.cooldownUntil = now + 900;
         if (g_swing.cooldownUntil < now + 700) g_swing.cooldownUntil = now + 700;
         if (g_swingL.cooldownUntil < now + 900) g_swingL.cooldownUntil = now + 900;  // bringing the hand back is no punch
-        vr::XrHaptic(0, 0.6f, 0.08f);
-        Log("vrmap: over-left-shoulder grab -> %s the Blades (weapon was %d, pad buttons 0x%04x, behind %.2f m, up %.2f m)",
+        vr::XrHaptic(1, 0.6f, 0.08f);
+        Log("vrmap: right hand over the left shoulder -> %s the Blades (weapon was %d, pad buttons 0x%04x, behind %.2f m, up %.2f m)",
             w == 2 ? "put away" : "draw", w, g_blades.button, behind, up);
     }
     if (now < g_blades.pressUntil) {
@@ -1045,8 +1052,8 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     if (fp::FpMode() == 1 && !plain) {
         UpdateSwing(R, L, g, now, fresh, aimLatch, g_gripHeld[1], g_gripHeld[0]);
         GateTick(g, now);
-        if (R.active) UpdateDraw(R, g_gripHeld[1], g, now);
-        if (L.active) UpdateBladesDraw(L, g_gripHeld[0], g, now);
+        if (R.active || L.active) UpdateDraw(R, L, R.active && g_gripHeld[1], L.active && g_gripHeld[0], g, now);
+        if (R.active) UpdateBladesDraw(R, g_gripHeld[1], g, now);
     } else {
         g_blades.prevGrip = g_gripHeld[0];
         g_blades.pressUntil = 0;

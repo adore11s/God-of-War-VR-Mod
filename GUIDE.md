@@ -96,10 +96,10 @@ These work while the game window or a SteamVR window is in front.
 | Wave back and forth fast | Continuous attack |
 | Punch with your fingers resting on the grip buttons (no weapon in hand) | Fist attack (touching the grips makes the fists; squeezing the left grip fully is the shield) |
 | Swing with the Blades drawn | Blades attack |
-| Left grip over your left shoulder | Equip the Blades of Chaos |
+| Right grip over your left shoulder | Equip / put away the Blades of Chaos |
 | Both hands above your head, then both down fast | Raging Smash / Chaos Slam |
 | Left trigger (aim) + a throwing motion | Throw the axe |
-| Right grip over your right shoulder | Equip / put away the axe |
+| Left grip over your right shoulder | Equip / put away the axe |
 | Right grip, or the left upper button (△ / Y), after a throw | Recall the axe |
 | Close your left hand (grip) | Shield |
 | Hold your left hand next to your head | Show your health, Spartan Rage and runic bars (first person hides them) |
