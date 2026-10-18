@@ -14,7 +14,7 @@ Everything beyond the basics in the [README](README.md).
 ## What the mod does
 
 - **Real stereo 3D.** Every frame is drawn twice, once per eye, with full head tracking (turning and leaning).
-- **A separate picture per eye.** Anti-aliasing keeps its own history for each eye. DLSS does too, but it still makes edges shimmer, so leave it off for now.
+- **A separate picture per eye.** Anti-aliasing and DLSS keep their own history and motion for each eye, so edges stay sharp and stable. DLSS is recommended.
 - **No depth-of-field blur** while VR is on, so nothing blurs where you look.
 - **A sharp HUD.** The interface is drawn at full resolution and fitted into the lenses. While aiming, the reticle shows exactly where the throw goes.
 - **Menus, videos and loading screens** show on a big screen floating in front of you.
@@ -38,7 +38,7 @@ Set these in the game's graphics settings before you play:
 | VSync | Off | The headset sets the pace; VSync to your monitor holds VR back |
 | Frame rate limit | Off | A cap below the headset's refresh rate makes VR judder |
 | Motion blur | 0 | It smears with every head movement |
-| DLSS (NVIDIA cards) | Off for now | It makes every edge shimmer in the headset |
+| DLSS (NVIDIA RTX cards) | **Quality** | Recommended: sharp, stable edges and better performance |
 | Graphics preset | **Low**, or **Original** if your PC can handle it | VR draws the game twice, once per eye |
 | HDR | Off | The headset picture is made from the normal (SDR) picture |
 
@@ -128,6 +128,7 @@ Most useful settings:
 | `render_size_auto` | 1 | The picture size matches what the headset asks for ("Auto" in the VR settings panel). 0 = use `render_size` |
 | `turn_snap` / `turn_speed` / `snap_turn_degrees` | 0 / 1.0 / 45 | First-person turning: smooth at a speed, or snap turns |
 | `walls_f1` | 1 | 0 = no wall collision in first person |
+| `finisher_third_person` | 0 | 1 = finishers play in third person (the game's own camera) instead of first person |
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
 | `crop_to_eye_fov` | 2 | Sends each eye's picture in exactly the shape the headset asks for (fixes doubled near objects on Quest Link). 2 = on every runtime except SteamVR, 1 = always, 0 = never |
 

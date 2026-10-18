@@ -31,6 +31,8 @@ void SharpUiCensus();               // D-145 command "sharpui census": one frame
 void SharpUiReticleObjectsMoved();  // D-149: the aiming icon's UI objects were placed for the aim point (any thread)
 float SharpUiReticleScaleNow();     // D-149: ui_reticle_scale (the aiming icon's size, x its native size)
 bool SharpUiActive();                // the HUD is drawn by the sharp HUD now (on, hooks complete, not fallen back)
+int SharpUiReticleMode();            // gowvr.ini ui_reticle_mode: 2 (default) no circle, 0 the D-104 circle, 1 D-149 objects
+float SharpUiAspect();               // the HUD target's width / height (the eye image's)
 void SharpUiPresentTick();           // Present (render thread), before SharpUiFinish
 
 }  // namespace gowvr::stereo

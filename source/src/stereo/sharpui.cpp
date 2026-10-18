@@ -1019,7 +1019,8 @@ void Composite(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target) {
     const bool objRet = GetTickCount64() - g_retObjAt.load() < 300;
     const float aspect = (float)g_uiW / (float)(g_uiH ? g_uiH : 1), fy = UiVerticalFix(aspect);
     struct { float s, sRet, retOn, rSrc, retSx, retSy, retDx, retDy, aspect, sY, sRetY, pad; } k{
-        fmaxf(uiScale, 0.05f), fmaxf(retScale, 0.05f), aiming && !objRet ? 1.f : 0.f, sr, su, sv, du, dv,
+        fmaxf(uiScale, 0.05f), fmaxf(retScale, 0.05f), aiming && !objRet && SharpUiReticleMode() != 2 ? 1.f : 0.f, sr,
+        su, sv, du, dv,
         aspect, fmaxf(uiScale * fy, 0.02f), fmaxf(retScale * fy, 0.02f), 0.f};
     // (D-118 / D-122 / D-123 changed this function after crashes here - reverted in D-124: the cause was g_rtCache
     // writing over g_cb / g_rs, not the context-state swap or the Map)
@@ -1157,6 +1158,7 @@ bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
 
 // the aiming reticle region is moved to the shot's direction this frame (pasted into the eye image then)
 bool ReticleRegionMoved() {
+    if (SharpUiReticleMode() == 2) return false;  // no circle (mutate.cpp aims through the drawn reticle)
     float su, sv, sr, du, dv;
     const bool aiming = AimReticleDisplay(&su, &sv, &sr, &du, &dv);
     return aiming && GetTickCount64() - g_retObjAt.load() >= 300;
@@ -1218,7 +1220,23 @@ bool SharpUiMarkView(uint8_t* view) {
     // the UI camera: camera->world translation (view +0x180) on the +z axis - LIVE 2026-10-04 (0, 0, 30); CAMERA_FINDINGS
     // saw (0, 0, 10) - its x (0) carries the marker
     float* pos = (float*)(view + 0x180);
-    if (fabsf(pos[0]) > 0.01f || fabsf(pos[1]) > 0.01f || pos[2] < 1.f) return false;
+    // owner 2026-10-18 (Brok's shop UI not sharp): LIVE the shop moves the same two UI views' camera to (0, -40.2, 29.7) -
+    // a vertical pan of the UI layout; only x carries the marker, so any y is taken (it was refused: the scaled UI)
+    if (fabsf(pos[0]) > 0.01f || pos[2] < 1.f) {
+        // evidence (owner 2026-10-18: "in Brok's shop the UI following my head is not sharp"; owner log: at the shop the
+        // scaled-UI count rose 14 -> 4098, the sharp HUD's stayed): which orthographic UI views are refused, and why
+        static uint8_t* seen[16] = {};
+        static std::atomic<int> n{0};
+        bool known = false;
+        for (uint8_t* v : seen) if (v == view) { known = true; break; }
+        if (!known && n.load() < 16) {
+            seen[n.fetch_add(1) & 15] = view;
+            const float* P = (const float*)(view + 0xd0);
+            Log("sharpui: UI view %p not taken - camera at (%.3f %.3f %.3f), ortho P00 %.5f P11 %.5f P30 %.3f P31 %.3f "
+                "P32 %.3f", view, pos[0], pos[1], pos[2], P[0], P[5], P[12], P[13], P[14]);
+        }
+        return false;
+    }
     pos[0] = kMarker;
     if (g_probeArm.load() || Probing())
         for (int k = 0; k < kTinyFields; ++k) {  // probe markers (w column, 0 in these views)
@@ -1318,6 +1336,17 @@ void SharpUiPresentTick() {
 }
 
 void SharpUiReticleObjectsMoved() { g_retObjAt = GetTickCount64(); }
+// Owner 2026-10-18 ("the aiming icon in the centre makes things around it enlarged in a circle"; "the frost icon on a
+// breakable target is split in two - one centred, the other a bit below and off centre"): both were the D-104 circle -
+// a disc of the HUD around the game's reticle spot pasted at the head's aim point, the rest of the HUD where the
+// ordinary paste puts it; the frost icon is bigger than the D-152 circle, so its outside stayed behind. ui_reticle_mode
+// 2 (default): no circle - the HUD is pasted once, whole, and the aim goes through the drawn reticle (mutate.cpp
+// AlignReticleToHead). 0 = the circle, 1 = D-149's moved reticle objects.
+int SharpUiReticleMode() {
+    static const int mode = (int)config::GetFloat("ui_reticle_mode", 2.f);
+    return mode;
+}
+float SharpUiAspect() { return g_uiW && g_uiH ? (float)g_uiW / (float)g_uiH : 1.f; }
 float SharpUiReticleScaleNow() {
     if (g_retScale.load() < -1.5f) g_retScale = config::GetFloat("ui_reticle_scale", -1.f);
     return g_retScale.load() > 0.f ? g_retScale.load() : UiScaleCurrent();

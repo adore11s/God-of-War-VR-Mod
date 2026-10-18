@@ -147,6 +147,10 @@ bool ExecuteCombat(const char* verb, const char* a, const char* b, int got) {
         stereo::LodScale((float)atof(a));
     } else if (!strcmp(verb, "dlsseyes")) {  // D-108
         stereo::DlssEyesEnable(strcmp(a, "off") != 0);
+    } else if (!strcmp(verb, "dlsslog")) {  // dlss-vr
+        stereo::DlssLog(got >= 2 ? atoi(a) : 24);
+    } else if (!strcmp(verb, "dlssfind")) {  // dlss-vr
+        stereo::DlssFind(got >= 2 ? atoi(a) : 10);
     } else if (!strcmp(verb, "uireticle")) {  // D-104
         stereo::SharpUiReticleScale((float)atof(a));
     } else if (!strcmp(verb, "hudmode") || !strcmp(verb, "combathud")) {

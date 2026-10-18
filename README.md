@@ -15,17 +15,18 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
 - **Your hands feel in the wrong place or don't move right, or you can't see a button prompt in first person?** Quickly switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
-- **Don't use DLSS for now.** It makes every edge shimmer in the headset. Turn it off in the game's graphics settings.
+- **Use DLSS (NVIDIA RTX cards).** It now works properly in VR: sharp, stable edges and better performance. In the game's graphics settings set **DLSS** to **Quality**.
 - **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
-- **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
+- **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision, the VR picture size and the finishers perspective. Point a controller at an option and pull its trigger.
 - **Equipping the axe:** reach over your **right shoulder** with **either hand** and press that hand's **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
 - **Equipping the Blades of Chaos:** reach over your **left shoulder** with **either hand** and press that hand's **grip button**.
-- **Finishers:** face the enemy directly in front of you. A finisher from behind the enemy doesn't work.
+- **Finishers:** face the enemy directly in front of you. A finisher from behind the enemy doesn't work. In the VR settings panel, **Finishers Perspective** picks whether finishers play in **first person** or in **third person** (the game's own camera).
 - **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the **right grip lightly** to make fists with both hands. The left grip is only the shield.
 
 ## What the mod does
 
 - **Native stereo rendering.** The game is drawn separately for each eye, with full head tracking.
+- **DLSS in VR.** Each eye keeps its own DLSS history and motion, so edges stay sharp and stable.
 - **First person** in normal gameplay and in cutscenes. You can see your whole body.
 - **Motion controls in first person:**
   - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists.
@@ -38,6 +39,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
 - **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (set in the VR settings panel).
 - **Smooth or snap turning** in first person, set in the VR settings panel.
+- **Finishers in first or third person**, set in the VR settings panel.
 - **A square VR picture** that matches your headset's resolution automatically (or a size you choose), whatever your monitor's resolution.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
 
@@ -49,7 +51,7 @@ Start the game normally once and, in its graphics settings:
 - turn **VSync** off,
 - turn the **frame rate limit** off,
 - set **Motion blur** to **0**,
-- turn **DLSS** off (it makes edges shimmer in VR),
+- set **DLSS** to **Quality** (NVIDIA RTX cards; recommended),
 - turn **HDR** off.
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
@@ -95,14 +97,12 @@ None of these files contain your user name or other personal information.
 ## Known bugs (fixes coming soon)
 
 - **Some of the interface is missing in first person** (the health and Spartan Rage bars).
-- **The Leviathan Axe's frost icon when aiming and Atreus' aiming icon are broken.**
+- **Atreus' aiming icon is broken.**
 - **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
 - **Phasing through walls during combat** (see *Important: read before playing*).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks, and the fists' hit area is too big: you can punch enemies from about 2 metres away.
-- **DLSS makes edges shimmer** (see *Important: read before playing*).
 - **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Use SteamVR for now.
 - **Button prompts can go missing in first person** (see *Important: read before playing* for the workaround).
-- **The aiming icon is too big while aiming.**
 
 ## Open source
 

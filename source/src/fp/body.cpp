@@ -11,6 +11,7 @@
 #include "../core/config.h"
 #include "../input/vpad.h"
 #include "../stereo/mutate.h"
+#include "../stereo/r1.h"
 #include "../stereo/sharpui.h"
 #include <algorithm>
 #include <cstdio>
@@ -3025,7 +3026,7 @@ static bool ReticleInRange(uint8_t* skel, const float* root, float* out) {
 static bool ReticlePlace(uint8_t* skel, const float* root, float* out) {
     // D-152 (owner: "revert the HUD fix for the aiming icon and the enemy bar - the middle circle, 2x smaller"): off by
     // default, the D-104 region paste is back (with half its radius, mutate.cpp); ui_reticle_mode 1 = D-149 again
-    static const int mode = (int)config::GetFloat("ui_reticle_mode", 0.f);
+    const int mode = stereo::SharpUiReticleMode();  // (owner 2026-10-18: 2 = no circle, the default)
     if (mode != 1) return ReticleInRange(skel, root, out);  // D-162
     const int nj = (int)(uint16_t)*(int16_t*)(skel + 0x38);
     if (nj < 1 || nj > 64) return false;
@@ -4354,6 +4355,7 @@ static void GemFixWorlds(uint8_t* hero, float* worlds, int where) {
 void __fastcall hk_PaletteBuild(uint8_t* inst, void* a2, void* a3, void* a4) {
     GemPaletteFix(inst);
     o_PaletteBuild(inst, a2, a3, a4);
+    stereo::R1SkinPrevious(inst, a2, a3, a4);  // dlss-vr: eye 1's previous pose = eye 0's
 }
 
 // D-069b "handjoints N" (owner: the loose chain from the fist to the Blade lags while moving): every joint of every

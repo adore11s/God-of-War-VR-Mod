@@ -9,6 +9,7 @@
 #include "eyes.h"
 #include "headcam.h"
 #include "mutate.h"
+#include "dlsseyes.h"
 #include "taaeyes.h"
 #include "../fp/body.h"
 #include <windows.h>
@@ -17,7 +18,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace gowvr::stereo {
 namespace {
@@ -199,6 +202,25 @@ std::atomic<int> g_double{0};
 std::atomic<unsigned> g_mask{0x1ff};
 std::atomic<uint64_t> g_doubled{0};
 
+// dlss-vr (owner 2026-10-18: "the left eye is perfect, the right eye shimmers a tiny bit around hair / small edges";
+// LIVE dlssmv with a still head: eye 0 had motion on Kratos' idle animation, eye 1 none - 3.0 % vs 0.8 % of pixels over
+// 0.05 px). STATIC: the draw submission sub_140470b70 gets a skinned instance's palettes from sub_140471c30(inst,
+// renderObject, &current, &previous): current = built now (TLS scratch), previous = renderObject +0x1a8 if it was stored
+// one frame id (0x141227b04) ago (+0x1b0), else none; the caller then stores this current there. Kick 2 came right after
+// kick 1: eye 1's "previous" was eye 0's current of the same frame - no motion for animated characters in eye 1 (DLSS /
+// TAA lost them there). Now kick 1's previous palette of each render object is copied (double-buffered per frame: eye 1's
+// draw may read it later) and handed to kick 2's same render object. Called from fp/body.cpp hk_PaletteBuild (the one
+// detour on sub_140471c30). gowvr.ini skin_per_frame 0 = as before.
+struct SkinPrev { uint64_t frame = 0; bool have = false; std::vector<uint8_t> data[2]; };
+SRWLOCK g_skinLock = SRWLOCK_INIT;
+std::unordered_map<uint64_t, SkinPrev*> g_skinPrev;
+std::atomic<uint64_t> g_skinGiven{0};
+// which eye's recording jobs run now: they build the palettes after their kick returned (LIVE: kick 1's while the
+// kick drains between the eyes, kick 2's after it) - 0 from kick 1's start, 1 from kick 2's until the next frame's
+// kick 1, -1 single kicks; the frame steps at kick 1's start
+std::atomic<int> g_skinEye{-1};
+std::atomic<uint64_t> g_skinFrame{0};
+
 template <class T> T& G(uint64_t va) { return *(T*)((uint8_t*)GameVa(va)); }
 template <class F> F Fn(uint64_t va) { return (F)((uint8_t*)GameVa(va)); }
 
@@ -327,6 +349,7 @@ std::atomic<int> g_snap{0};
 
 // ---- Per-eye state bank (gate B policy "snapshot/restore"): ranges from gowvr_logs/r1bank.txt (tools/re/r1bankgen.py)
 struct BankRange { uint64_t va; uint32_t len; uint32_t off; };
+constexpr uint64_t kJitterCounterVa = 0x14506c5c8;  // dlss-vr: sub_1404d2130's jitter phase counter (see BankDefault)
 BankRange g_bank[4096];
 int g_nbank = 0;
 uint8_t g_bankData[1 << 20];
@@ -361,6 +384,12 @@ void BankDefault() {
         {0x14123b760, 8, 0},   // render-time accumulator
         {0x1412d7598, 8, 0},   // 16-step jitter / sequence index
         {0x142454748, 8, 0},   // light-server accumulator (restoring it fixes eye-1 emissive/particle lighting)
+        // dlss-vr (owner 2026-10-18: "DLSS shimmers around edges, like showing squares"): the jitter phase counter of
+        // the jittered-projection builder sub_1404d2130 (index = counter % length, Halton 2/3; its only user). It
+        // stepped once per KICK: eye 0 got the odd phases, eye 1 the even ones (LIVE dlsslog: 4 phases per eye, never
+        // the same in both eyes) - DLSS / TAA could not resolve sub-pixel edges. Restored for kick 2: both eyes share
+        // one phase and it steps once per frame through the whole sequence. gowvr.ini jitter_per_frame 0 = as before.
+        {kJitterCounterVa, 4, 0},
     };
     g_nbank = 0;
     uint32_t total = 0;
@@ -376,7 +405,9 @@ void BankCapture() {
 }
 
 void BankRestore() {
+    static const bool jitterPerFrame = config::GetFloat("jitter_per_frame", 1.f) > 0.5f;
     for (int i = 0; i < g_nbank; ++i) {
+        if (g_bank[i].va == kJitterCounterVa && !jitterPerFrame) continue;
         // D-117 (owner crash 2026-10-05 19:24, d3d11.dll+0x193fe4 on the first stereo frame after an area load): the fog
         // history pointers 0x1412390a8 / b0 point INTO the PassVolumetricFog object (this + 0x348 / 0x3a8 and + 0x1c8 /
         // 0x228, render_passes_019 vfunc_1 - the ping-pong moves each by 0x60 only). A load resets them to a default
@@ -465,6 +496,7 @@ void __fastcall hk_Kick() {
     // D-083: a 2D screen frame (VR, pause menu) is one plain kick with the game's camera (xr.cpp shows it as a screen);
     // the per-eye histories are stale afterwards
     const bool flat2D = g_vr.load() && Screen2DFrame();
+    DlssVrFrame(g_vr.load() && !flat2D && g_double.load() > 0);  // dlss-vr: the jitter phase count
     static bool wasFlat2D = false;
     if (wasFlat2D && !flat2D) {
         ResetEyeHistory();
@@ -472,6 +504,7 @@ void __fastcall hk_Kick() {
     }
     wasFlat2D = flat2D;
     if (flat2D) {
+        g_skinEye = -1;
         fp::BodyHideDrawBegin();
         o_Kick();
         fp::BodyHideDrawEnd();
@@ -483,6 +516,8 @@ void __fastcall hk_Kick() {
         if (g_diffMode.load() == 1) DataSnap(g_preKick);
         const bool bank = (g_mask.load() & 0x2000) && g_nbank > 0;
         if (bank) BankCapture();
+        ++g_skinFrame;
+        g_skinEye = 0;
         bool headOn = false;
         if (g_vr.load()) {
             vr::EyeViews used;
@@ -520,6 +555,7 @@ void __fastcall hk_Kick() {
         // per simulation frame: kick 2 runs with render delta-time 0 until its asynchronous work has finished.
         // (dt was set to 0 inside BetweenEyes, after kick 1 drained and before render-begin; see g_savedDt)
         const bool freezeDt = (g_mask.load() & 0x4000) != 0;
+        g_skinEye = 1;
         if (headOn) SetEyeIndex(1);
         else if (g_eyesOn) { SetEyeIndex(1); SetEyeCamera(true, g_eyeOff[1] + wob, g_eyeYawDeg[1]); }
         // Sync point (0x20000): kick 2 rewrites the effects job's 3-slot CPU blocks (0x1422b2c00 + slot*0x55c0) that the
@@ -576,6 +612,7 @@ void __fastcall hk_Kick() {
         fp::BodyHideDrawEnd();
         return;
     }
+    g_skinEye = -1;
     uint64_t before[kN], after[kN];
     for (int i = 0; i < kN; ++i) before[i] = Read(kGlobals[i]);
     LARGE_INTEGER t0, t1, f;
@@ -597,6 +634,57 @@ void __fastcall hk_Kick() {
 }  // namespace
 uint64_t R1Kicks() { return g_kicks.load(); }  // D-083 loadwatch
 int R1KickPhase() { return g_kickPhase.load(); }
+
+void R1SkinPrevious(uint8_t* inst, void* renderObject, void* curOut, void* prevOut) {
+    static const bool on = config::GetFloat("skin_per_frame", 1.f) > 0.5f;
+    const int phase = g_kickPhase.load();
+    {   // evidence: in which kick phase the palettes are built (main thread's phase, read from the building thread)
+        static std::atomic<uint64_t> byPhase[5], calls{0};
+        ++byPhase[phase >= 0 && phase < 5 ? phase : 0];
+        const uint64_t c = ++calls;
+        if (c == 2000 || c % 200000 == 0)
+            Log("r1: skinning palettes built by kick phase: none %llu, eye 0 %llu, between %llu, eye 1 %llu, other %llu "
+                "(given to eye 1 %llu)", (unsigned long long)byPhase[0].load(), (unsigned long long)byPhase[1].load(),
+                (unsigned long long)byPhase[2].load(), (unsigned long long)byPhase[3].load(),
+                (unsigned long long)byPhase[4].load(), (unsigned long long)g_skinGiven.load());
+    }
+    const int eye = g_skinEye.load();
+    if (!on || !inst || !renderObject || !prevOut || eye < 0 || g_double.load() <= 0) return;
+    (void)curOut;
+    const uint8_t* skel = *(uint8_t* const*)(inst + 0x10);
+    if (!skel) return;
+    const size_t bytes = (size_t)*(const uint16_t*)(skel + 0x38) * 0x40;  // one 4x4 matrix per joint
+    if (!bytes || bytes > 2048 * 0x40) return;
+    const uint64_t frame = g_skinFrame.load();
+    uint8_t** prev = (uint8_t**)prevOut;
+    if (eye == 0) {  // eye 0: keep a copy of its previous palette for eye 1
+        AcquireSRWLockExclusive(&g_skinLock);
+        SkinPrev*& e = g_skinPrev[(uint64_t)renderObject];
+        if (!e) e = new SkinPrev();
+        ReleaseSRWLockExclusive(&g_skinLock);
+        e->frame = frame;
+        e->have = *prev != nullptr;
+        if (e->have) {
+            std::vector<uint8_t>& d = e->data[frame & 1];
+            d.resize(bytes);
+            memcpy(d.data(), *prev, bytes);
+        }
+        return;
+    }
+    AcquireSRWLockShared(&g_skinLock);
+    const auto it = g_skinPrev.find((uint64_t)renderObject);
+    SkinPrev* e = it != g_skinPrev.end() ? it->second : nullptr;
+    ReleaseSRWLockShared(&g_skinLock);
+    if (!e || e->frame != frame) return;  // not drawn for eye 0 this frame: as the game does
+    if (!e->have) { *prev = nullptr; return; }
+    std::vector<uint8_t>& d = e->data[frame & 1];
+    if (d.size() != bytes) return;
+    *prev = d.data();
+    const uint64_t n = ++g_skinGiven;
+    if (n == 1 || n % 50000 == 0)
+        Log("r1: eye 1 skinned objects get eye 0's previous pose (#%llu) - their motion vectors match eye 0's",
+            (unsigned long long)n);
+}
 
 bool R1Install() {
     static bool done = false;

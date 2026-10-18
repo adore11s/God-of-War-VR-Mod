@@ -138,6 +138,41 @@ static bool ShopScene() {
     return lastSeen && now - lastSeen < 500;
 }
 
+// Owner 2026-10-18 (VR settings panel "Finishers / executions"): with Third person the finishers play in the game's own
+// camera instead of F1 / F3 - the sync kills whose move names start with "cs": the draugr finishers
+// (csDraugr00BareRageGruntRunEnter / Loop / ExitThrow, csDraugr00BareRageKillRip), the troll kill (csragegrabtroll00enter,
+// csRageBeatdownTroll00Idle / Finisher - D-210 counted it as a cutscene for F3). Not the other sync moves (climbing nav*,
+// objects env*) nor the Baldur fight's scripted csBaldur* / csMMA* (D-184 / D-192: cutscenes), nor csDef* (parries,
+// ordinary combat). Held 0.5 s past the last such frame (the kills chain a few moves). gowvr.ini finisher_third_person.
+static bool FinisherName(const char* a) {
+    if (!a || _strnicmp(a, "cs", 2) != 0) return false;
+    return _strnicmp(a, "csbaldur", 8) != 0 && _strnicmp(a, "csmma", 5) != 0 && _strnicmp(a, "csdef", 5) != 0;
+}
+static bool FinisherScene() {
+    if (config::GetFloat("finisher_third_person", 0.f) < 0.5f) return false;
+    static ULONGLONG lastSeen = 0;
+    static bool logged = false;
+    char prim[96];
+    HeroPrimaryAnim(prim, sizeof(prim));
+    const char* act = ActiveMoveAnim();
+    auto trollKill = [](const char* a) {  // (the troll kill's moves may not all be sync moves)
+        if (!FinisherName(a)) return false;
+        for (const char* p = a; *p; ++p)
+            if (_strnicmp(p, "troll", 5) == 0) return true;
+        return false;
+    };
+    const bool troll = trollKill(act) || trollKill(prim);
+    const bool now1 = (HeroInSyncMove() && (FinisherName(act) || FinisherName(prim))) || troll;
+    const ULONGLONG now = GetTickCount64();
+    if (now1) {
+        if (!logged || now - lastSeen > 2000)
+            Log("fp: finisher '%s' - third person while it plays (finisher_third_person)", FinisherName(act) ? act : prim);
+        logged = true;
+        lastSeen = now;
+    }
+    return lastSeen && now - lastSeen < 500;
+}
+
 static std::atomic<bool> g_sceneAnimating{false};
 bool SceneAnimating() { return g_sceneAnimating.load(); }
 
@@ -168,7 +203,8 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
             Log("fp: cutscene over - F3 back (D-220f)");
         }
     }
-    const bool want = cine ? (g_cutscene.load() && !g_f3Suspended.load()) : (g_gameplay.load() && !ShopScene());
+    const bool want = !FinisherScene() &&
+                      (cine ? (g_cutscene.load() && !g_f3Suspended.load()) : (g_gameplay.load() && !ShopScene()));
     const int mode = !want ? 0 : (cine ? 2 : 1);
     int head = want ? FindJointByHash(kHeadHash) : -1;
     Mat4 h{};

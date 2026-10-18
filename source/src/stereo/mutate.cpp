@@ -5,6 +5,7 @@
 #include "../core/log.h"
 #include "../core/mat.h"
 #include "headcam.h"
+#include "dlsseyes.h"
 #include "sharpui.h"
 #include "../fp/firstperson.h"
 #include "../fp/body.h"
@@ -462,10 +463,9 @@ struct AimRet { float srcU, srcV, srcR, dstU, dstV; };
 AimRet g_aimRet{0.5f, 0.4366f, 0.045f, 0.5f, 0.5f};
 std::atomic<ULONGLONG> g_aimRetTick{0};
 float EyeTanYForAim();
-void AlignReticleToHead(uint8_t* view, Mat4* hw) {
-    static int align = -1;
-    if (align < 0) align = config::GetFloat("aim_reticle_align", 1.f) > 0.5f ? 1 : 0;
-    if (!align || !SharpUiActive()) return;
+float EyeTanXForAim();
+// the game's reticle spot (UI uv) and its D-104 circle radius: gameplay or a cinematic aim section
+void ReticleSpot(float* u, float* v, float* r) {
     static float g[6] = {-1.f};
     if (g[0] < 0.f) {
         g[0] = config::GetFloat("ui_reticle_x", 0.5f);
@@ -476,20 +476,47 @@ void AlignReticleToHead(uint8_t* view, Mat4* hw) {
         g[5] = config::GetFloat("ui_reticle_cine_r", 0.03f);  // D-152: half (was 0.06)
     }
     const bool cine = fp::InCinematic();
-    const float u = cine ? g[3] : g[0], v = cine ? g[4] : g[1], r = cine ? g[5] : g[2];
-    const float* P = (const float*)(view + 0xd0);  // view B's own projection (kept): P00 = 1/tanX, P11 = 1/tanY
-    if (P[0] <= 0.f || P[5] <= 0.f) return;
-    // the reticle ray in view B's camera space (looks down -Z): (x, y, -1)
-    const float x = (u - 0.5f) * 2.f / P[0], y = (0.5f - v) * 2.f / P[5];
-    // Q turns that ray onto -Z (row vectors: yaw about Y, then pitch about X); view B = Q * pitched head
+    *u = cine ? g[3] : g[0];
+    *v = cine ? g[4] : g[1];
+    *r = cine ? g[5] : g[2];
+}
+// ui_reticle_mode 2: where the ordinary sharp-HUD paste draws the game's reticle in the eye image (sharpui.cpp
+// Composite: about the image centre, x the HUD scale, vertically x UiVerticalFix)
+void DrawnReticle(float* du, float* dv) {
+    float u, v, r;
+    ReticleSpot(&u, &v, &r);
+    const float s = UiScaleCurrent(), fy = UiVerticalFix(SharpUiAspect());
+    *du = 0.5f + (u - 0.5f) * s;
+    *dv = 0.5f + (v - 0.5f) * s * fy;
+}
+// The rotation (row vectors) that turns the ray (x, y, -1) onto -Z: yaw about Y, then pitch about X
+Mat4 RayToForward(float x, float y) {
     const float a = atanf(x), L = sqrtf(1.f + x * x), b = atan2f(-y, L);
     Mat4 Ry{}, Rx{};
     Ry.m[0][0] = cosf(a); Ry.m[0][2] = -sinf(a); Ry.m[1][1] = 1.f; Ry.m[2][0] = sinf(a); Ry.m[2][2] = cosf(a); Ry.m[3][3] = 1.f;
     Rx.m[0][0] = 1.f; Rx.m[1][1] = cosf(b); Rx.m[1][2] = sinf(b); Rx.m[2][1] = -sinf(b); Rx.m[2][2] = cosf(b); Rx.m[3][3] = 1.f;
-    *hw = Mul(Mul(Ry, Rx), *hw);
-    // where that is in the eye image: the head's forward raised by aim_pitch_deg
+    return Mul(Ry, Rx);
+}
+void AlignReticleToHead(uint8_t* view, Mat4* hw) {
+    static int align = -1;
+    if (align < 0) align = config::GetFloat("aim_reticle_align", 1.f) > 0.5f ? 1 : 0;
+    if (!align || !SharpUiActive()) return;
+    float u, v, r;
+    ReticleSpot(&u, &v, &r);
+    const bool cine = fp::InCinematic();
+    const float* P = (const float*)(view + 0xd0);  // view B's own projection (kept): P00 = 1/tanX, P11 = 1/tanY
+    if (P[0] <= 0.f || P[5] <= 0.f) return;
+    // the reticle ray in view B's camera space (looks down -Z): (x, y, -1)
+    const float x = (u - 0.5f) * 2.f / P[0], y = (0.5f - v) * 2.f / P[5];
+    // Q turns that ray onto -Z (row vectors: yaw about Y, then pitch about X); view B = Q * the aiming head
+    const float a = atanf(x), L = sqrtf(1.f + x * x), b = atan2f(-y, L);
+    *hw = Mul(RayToForward(x, y), *hw);
+    // where that is in the eye image: mode 2 the drawn reticle (hk_ViewUpdate turned the head toward it), otherwise the
+    // head's forward raised by aim_pitch_deg (the D-104 circle is pasted there)
     const float ty = EyeTanYForAim();
-    g_aimRet = {u, v, r, 0.5f, ty > 0.f ? 0.5f - tanf(g_aimPitchDeg * 0.0174533f) / (2.f * ty) : 0.5f};
+    float du = 0.5f, dv = ty > 0.f ? 0.5f - tanf(g_aimPitchDeg * 0.0174533f) / (2.f * ty) : 0.5f;
+    if (SharpUiReticleMode() == 2) DrawnReticle(&du, &dv);
+    g_aimRet = {u, v, r, du, dv};
     g_aimRetTick = GetTickCount64();
     static uint64_t n = 0;
     if (++n == 1 || n % 900 == 0)
@@ -582,11 +609,23 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
     if (g_aimHead.load() && view == *At<uint8_t*>(kViewBPtrVa)) {
         if (g_aimPitchDeg < -999.f) g_aimPitchDeg = config::GetFloat("aim_pitch_deg", 3.f);
         Mat4 hw = g_headWorld;  // pitch up about the camera's right axis (it looks down -Z)
-        const float ap = g_aimPitchDeg * 0.0174533f, ca = cosf(ap), sa = sinf(ap);
-        for (int j = 0; j < 3; ++j) {
-            const float y = g_headWorld.m[1][j], z = g_headWorld.m[2][j];
-            hw.m[1][j] = y * ca + z * sa;
-            hw.m[2][j] = z * ca - y * sa;
+        if (SharpUiReticleMode() == 2 && SharpUiActive() && EyeTanXForAim() > 0.f && EyeTanYForAim() > 0.f) {
+            // ui_reticle_mode 2: the head's ray through the drawn reticle (eye-image uv -> the eye frustum's tangents)
+            float du, dv;
+            DrawnReticle(&du, &dv);
+            const Mat4 q = RayToForward((2.f * du - 1.f) * EyeTanXForAim(), (1.f - 2.f * dv) * EyeTanYForAim());
+            Mat4 qt{};  // its inverse (a rotation: the transpose) turns -Z onto that ray
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) qt.m[i][j] = q.m[j][i];
+            qt.m[3][3] = 1.f;
+            hw = Mul(qt, g_headWorld);
+        } else {
+            const float ap = g_aimPitchDeg * 0.0174533f, ca = cosf(ap), sa = sinf(ap);
+            for (int j = 0; j < 3; ++j) {
+                const float y = g_headWorld.m[1][j], z = g_headWorld.m[2][j];
+                hw.m[1][j] = y * ca + z * sa;
+                hw.m[2][j] = z * ca - y * sa;
+            }
         }
         AlignReticleToHead(view, &hw);  // D-107
         Mat4 d = Mul(hw, RigidInverse(Load(view + 0x150)));
@@ -628,6 +667,7 @@ Mat4 g_eyeDelta[2];
 float g_eyeTan[2][2] = {{0, 0}, {0, 0}};
 float g_fovTan[2] = {0, 0};  // requested symmetric tanX/tanY for the eye views (0 = keep the game's projection)
 float EyeTanYForAim() { return g_fovTan[1]; }
+float EyeTanXForAim() { return g_fovTan[0]; }
 
 // Rewrites every projection-derived field of a view copy for a symmetric frustum (tanX, tanY), keeping near/far and the
 // reverse-Z terms. Layout (LIVE-ext dump of view A, 2026-09-27): +0x10 view, +0x50 view*proj, +0x90 view*proj*viewport,
@@ -658,7 +698,7 @@ void OverrideProjection(uint8_t* v, float tx, float ty) {
     float* sy = (float*)(v + 0x290);
     for (int i = 0; i < 4; ++i) { sx[i] = tx; sy[i] = ty; }
 }  // rendered tanX, tanY per eye (from the built RenderView projection)
-uint8_t g_eyeHist[2][128];
+uint8_t g_eyeHist[2][192];
 bool g_eyeHistValid[2] = {false, false};
 std::atomic<int> g_rvProbe{0};
 int g_rvProbeEye = 1;
@@ -701,19 +741,36 @@ void __fastcall hk_RVBuild(uint8_t* rv, int kind, uint8_t* view, uint64_t p4) {
         }
         g_offX = savedOff;
         g_yawRad = savedYaw;
-        // Per-eye banked temporal state: the builder copies current (+0x80 cam->world, +0x240 view*proj) into previous
-        // (+0xc0, +0x100) before computing the new frame, so seed "current" with THIS eye's last values; the engine then
-        // derives a correct per-eye previous camera for velocity/TAA/FSR reprojection (rvprobe receipt 2026-09-27).
+        // Per-eye previous camera (velocity / TAA / DLSS reprojection). dlss-vr fix (owner 2026-10-18: "DLSS shimmers
+        // around edges, like showing squares"; STATIC sub_1404d25b0, as the GoWR mod's rvseam.cpp): BEFORE writing this
+        // build's matrices the builder derives the previous ones from the OLD contents - previous view*proj +0x100 =
+        // old +0x40 (world->view) x old +0x00 (projection), previous cam->world +0x80 = old +0xc0. This seeded +0x80 /
+        // +0x240 instead, which the builder overwrites / never reads: every eye's "previous" camera was the OTHER eye's
+        // last build. LIVE dlssmv with a still head: eye 0 motion vectors -5.6 px, eye 1 +5.7 px (max 28 px near), 97 %
+        // of pixels over 0.5 px (flat: 0) - DLSS / TAA rejected their history every frame. Now +0x00..+0x7f and
+        // +0xc0..+0xff get THIS eye's last values before its build. gowvr.ini eye_history_fix 0 = as before.
         int eye = g_eyeIndex;
+        static const bool histFix = config::GetFloat("eye_history_fix", 1.f) > 0.5f;
         if (g_eyeHistValid[eye]) {
-            memcpy(rv + 0x80, g_eyeHist[eye], 64);
-            memcpy(rv + 0x240, g_eyeHist[eye] + 64, 64);
+            if (histFix) {
+                memcpy(rv + 0x00, g_eyeHist[eye], 128);
+                memcpy(rv + 0xc0, g_eyeHist[eye] + 128, 64);
+            } else {
+                memcpy(rv + 0x80, g_eyeHist[eye], 64);
+                memcpy(rv + 0x240, g_eyeHist[eye] + 64, 64);
+            }
         }
         o_RVBuild(rv, kind, g_viewCopy, p4);
+        DlssNoteProjection(g_eyeIndex, (const float*)rv);  // dlss-vr diagnostic (dlsslog)
         const float* proj = (const float*)rv;  // +0x0 projection: P00 = 1/tanX, P11 = 1/tanY
         if (proj[0] != 0.f && proj[5] != 0.f) { g_eyeTan[eye][0] = 1.f / proj[0]; g_eyeTan[eye][1] = 1.f / proj[5]; }
-        memcpy(g_eyeHist[eye], rv + 0x80, 64);
-        memcpy(g_eyeHist[eye] + 64, rv + 0x240, 64);
+        if (histFix) {
+            memcpy(g_eyeHist[eye], rv + 0x00, 128);
+            memcpy(g_eyeHist[eye] + 128, rv + 0xc0, 64);
+        } else {
+            memcpy(g_eyeHist[eye], rv + 0x80, 64);
+            memcpy(g_eyeHist[eye] + 64, rv + 0x240, 64);
+        }
         g_eyeHistValid[eye] = true;
         if (g_rvProbe > 0) {  // diagnostic: find RenderView fields that carry the previous build's current matrices
             int pe = g_rvProbeEye ^= 1;
@@ -735,6 +792,7 @@ void __fastcall hk_RVBuild(uint8_t* rv, int kind, uint8_t* view, uint64_t p4) {
     if (g_seam != kRenderView || kind != 0 || rv != At<uint8_t>(kMainRenderViewVa) ||
         view != *At<uint8_t*>(kViewAPtrVa)) {
         o_RVBuild(rv, kind, view, p4);
+        if (kind == 0 && rv == At<uint8_t>(kMainRenderViewVa)) DlssNoteProjection(-1, (const float*)rv);  // dlss-vr
         return;
     }
     memcpy(g_viewCopy, view, sizeof(g_viewCopy));

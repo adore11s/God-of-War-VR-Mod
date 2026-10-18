@@ -22,6 +22,8 @@ void R1Wobble(float amp);
 void R1FogFix(bool on);
 void R1Mask(unsigned mask);
 uint64_t R1Kicks();  // frame-graph kicks so far (D-083 loadwatch)
+// dlss-vr: fp/body.cpp hk_PaletteBuild, after sub_140471c30 built a skinned instance's palettes - eye 1 gets eye 0's previous
+void R1SkinPrevious(uint8_t* inst, void* renderObject, void* curOut, void* prevOut);
 int R1KickPhase();   // D-099: main thread: 0 none / 1 in kick 1 (eye 0) / 2 between the eyes / 3 in kick 2 (eye 1) / 4 other kick work (single kick, before kick 1)
 
 }  // namespace gowvr::stereo
