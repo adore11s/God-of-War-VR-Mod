@@ -336,8 +336,12 @@ void UpdateSwing(const vr::HandState& R, const vr::HandState& L, XINPUT_GAMEPAD*
     // fist for fist_hold_ms (700) after its fingers last read as on the grip
     static ULONGLONG fistSeen[2] = {0, 0};
     static const ULONGLONG fistHold = (ULONGLONG)config::GetFloat("fist_hold_ms", 700.f);
-    if (FistHand(L)) fistSeen[0] = now;
-    if (FistHand(R)) fistSeen[1] = now;
+    // Owner 2026-10-18 (Meta Quest, no finger sensing): squeezing the left grip lightly for a fist raised the shield by
+    // accident - without finger data the RIGHT grip alone (a light squeeze) makes both hands fists, and the left grip is
+    // only the shield
+    const bool fistR0 = FistHand(R);
+    if (L.fingersValid ? FistHand(L) : fistR0) fistSeen[0] = now;
+    if (fistR0) fistSeen[1] = now;
     const bool fistL = fistSeen[0] && now - fistSeen[0] <= fistHold, fistR = fistSeen[1] && now - fistSeen[1] <= fistHold;
     const bool fistsReady = fistR || fistL;
     {

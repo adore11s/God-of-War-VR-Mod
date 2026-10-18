@@ -10,6 +10,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
   - **First person during gameplay:** press the **right trigger next to your head**.
   - **First person during cutscenes:** **hold** the **right trigger next to your head**.
 - **The first-person view sits slightly off Kratos' head, on purpose.** Seen from exactly where his eyes are, his shoulder armour blocks the view, so the camera sits a little in front of and above that spot.
+- **For the best experience, play with SteamVR.** Early playtesters had fewer problems on SteamVR than on Virtual Desktop's VDXR (flickering lights and such). Controllers with finger sensing on the grip buttons, like the **PlayStation VR2** controllers, work best.
 - **Tested only up to the World Serpent scene.** After that you may get crashes or wrong body animations.
 - **Your hands feel in the wrong place or don't move right?** Switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
@@ -17,7 +18,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
 - **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision and the VR picture size. Point a controller at an option and pull its trigger.
 - **Equipping the axe:** reach over your **right shoulder** and press the **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
-- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the grips **lightly** for fists, and fully for the shield.
+- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the **right grip lightly** to make fists with both hands. The left grip is only the shield.
 
 ## What the mod does
 
@@ -96,6 +97,7 @@ None of these files contain your user name or other personal information.
 - **Phasing through walls during combat** (see *Important: read before playing*).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks, and the fists' hit area is too big: you can punch enemies from about 2 metres away.
 - **DLSS makes edges shimmer** (see *Important: read before playing*).
+- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Use SteamVR for now.
 ## Open source
 
 The mod is free and open source under the **MIT license**. The full source code is in the [`source`](source) folder.
