@@ -41,11 +41,12 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 Start the game normally once and, in its graphics settings:
 
+- set the **Display mode** to **Windowed**,
 - turn **VSync** off,
 - turn the **frame rate limit** off,
 - set **Motion blur** to **0**,
 - turn **DLSS** off (it makes edges shimmer in VR),
-- turn **HDR** off,
+- turn **HDR** off.
 
 **Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
 

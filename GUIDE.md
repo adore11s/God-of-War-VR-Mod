@@ -47,7 +47,7 @@ Also recommended:
 | Setting | Value |
 |---|---|
 | Film grain | 0 (it reads as noise in a headset) |
-| Display mode | Windowed or Borderless (both fine) |
+| Display mode | **Windowed** (needed for the square VR picture and the small window) |
 
 **The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. Bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
 
