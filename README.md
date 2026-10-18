@@ -11,7 +11,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
   - **First person during cutscenes:** **hold** the **right trigger next to your head**.
 - **The first-person view sits slightly off Kratos' head, on purpose.** Seen from exactly where his eyes are, his shoulder armour blocks the view, so the camera sits a little in front of and above that spot.
 - **For the best experience, play with SteamVR.** Early playtesters had fewer problems on SteamVR than on Virtual Desktop's VDXR (flickering lights and such). Controllers with finger sensing on the grip buttons, like the **PlayStation VR2** controllers, work best.
-- **Tested only up to the World Serpent scene.** After that you may get crashes or wrong body animations.
+- **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
 - **Your hands feel in the wrong place or don't move right?** Switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
 - **Don't use DLSS for now.** It makes every edge shimmer in the headset. Turn it off in the game's graphics settings.
