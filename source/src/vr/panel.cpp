@@ -5,6 +5,7 @@
 #include "../core/log.h"
 #include "../input/vpad.h"
 #include "../diag/cmd.h"
+#include "../frame/rendersize.h"
 #include "../stereo/mutate.h"
 #include <windows.h>
 #include <atomic>
@@ -86,18 +87,29 @@ void Apply(Action a) {
         case kVrOff: diag::RequestVr(false); break;  // as F9 - F9 turns it back on
         case kSizeDown:
         case kSizeUp: {
+            // "Auto" (the size the runtime asks for, rendersize.cpp) is the step above the largest size
+            const int count = (int)(sizeof(kSizes) / sizeof(kSizes[0]));
+            if (const int autoPx = frame::AutoRenderSize()) {
+                if (a == kSizeUp) break;
+                int i = count - 1;
+                while (i > 0 && kSizes[i] >= autoPx) --i;  // the largest size below Auto
+                config::SetFloat("render_size_auto", 0.f);
+                config::SetFloat("render_size", (float)kSizes[i]);
+                break;
+            }
             int i = Nearest(kSizes, config::GetFloat("render_size", 2048.f)) + (a == kSizeUp ? 1 : -1);
-            i = i < 0 ? 0 : i >= (int)(sizeof(kSizes) / sizeof(kSizes[0])) ? (int)(sizeof(kSizes) / sizeof(kSizes[0])) - 1 : i;
+            if (i >= count && frame::RuntimeEyeSizeKnown()) { config::SetFloat("render_size_auto", 1.f); break; }
+            i = i < 0 ? 0 : i >= count ? count - 1 : i;
             config::SetFloat("render_size", (float)kSizes[i]);
             break;
         }
         default: return;
     }
     g_needDraw = true;
-    Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f", (int)a,
+    Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f%s", (int)a,
         Snap() ? "snap" : "smooth", config::GetFloat("turn_speed", 1.f) * 100.f,
         config::GetFloat("snap_turn_degrees", 45.f), input::PadMode() ? "PlayStation" : "Xbox", Walls() ? "on" : "off",
-        config::GetFloat("render_size", 2048.f));
+        config::GetFloat("render_size", 2048.f), frame::AutoRenderSize() ? " (auto)" : "");
 }
 
 bool MakeSurface() {
@@ -176,8 +188,12 @@ void Layout(wchar_t* stepText, wchar_t* sizeText) {
     y += 140;
     AddButton(40, y, 440, 72, kVrOn, L"On", true);  // the panel only shows in VR
     AddButton(520, y, 440, 72, kVrOff, L"Off", false);
-    const int n = (int)config::GetFloat("render_size", 2048.f);
-    swprintf_s(sizeText, 32, L"%d x %d", n, n);
+    if (const int autoPx = frame::AutoRenderSize()) {
+        swprintf_s(sizeText, 32, L"Auto (%d x %d)", autoPx, autoPx);
+    } else {
+        const int n = (int)config::GetFloat("render_size", 2048.f);
+        swprintf_s(sizeText, 32, L"%d x %d", n, n);
+    }
 }
 
 void Draw() {
@@ -302,9 +318,9 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
     }
     // redraw when a value or the hovered button changed (values: also changed with F10 / F11 or a gowvr.ini edit)
     char state[96];
-    sprintf_s(state, "%d %.2f %.0f %d %d %.0f", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
+    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
               config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(), Walls() ? 1 : 0,
-              config::GetFloat("render_size", 2048.f));
+              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize());
     if (hover != g_hover || strcmp(state, g_lastState) != 0 || g_needDraw) {
         g_hover = hover;
         strcpy_s(g_lastState, state);

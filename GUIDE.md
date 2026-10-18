@@ -49,7 +49,7 @@ Also recommended:
 | Film grain | 0 (it reads as noise in a headset) |
 | Display mode | **Windowed** (needed for the square VR picture and the small window) |
 
-**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. Bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
+**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. By default it is **Auto**: the size your headset asks for (SteamVR: its resolution setting; Virtual Desktop: its VR Graphics Quality), so every headset gets a sharp picture without changing anything. Pick a fixed size instead if the game runs too slowly; bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
 
 ---
 
@@ -124,7 +124,8 @@ Most useful settings:
 | `rumble_strength` | 1.0 | Controller rumble strength (0 = off) |
 | `hide_body` | 0 | 1 = only the arms in first person (F7) |
 | `screen_dist` / `screen_width` | 2.2 / 3.4 | Distance and size of the floating screen, in metres |
-| `render_size` | 2048 | VR picture size per eye (square), 0 = the game's own resolution |
+| `render_size` | 2048 | VR picture size per eye (square) when `render_size_auto` is 0; 0 = the game's own resolution |
+| `render_size_auto` | 1 | The picture size matches what the headset asks for ("Auto" in the VR settings panel). 0 = use `render_size` |
 | `turn_snap` / `turn_speed` / `snap_turn_degrees` | 0 / 1.0 / 45 | First-person turning: smooth at a speed, or snap turns |
 | `walls_f1` | 1 | 0 = no wall collision in first person |
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
@@ -158,8 +159,8 @@ Nothing in the game is replaced or patched on disk.
 - To use a runtime for this game only, without changing your PC's default: set the `XR_RUNTIME_JSON` environment variable to that runtime's `.json` file.
 
 **The picture in the headset is blurry or low resolution**
-- Raise the **VR picture size** in the VR settings panel (settings menu), for example to 2560 or 2816.
-- Virtual Desktop: also raise its **VR Graphics Quality** (e.g. Ultra or Godlike).
+- Set the **VR picture size** in the VR settings panel (settings menu) to **Auto** (one step above the largest size).
+- Auto follows your runtime's resolution: raise SteamVR's resolution setting, or Virtual Desktop's **VR Graphics Quality** (e.g. Ultra or Godlike). Lower it if the game runs too slowly.
 
 **Menus, videos or the HUD look too big**
 Edit `gowvr.ini` next to `GoW.exe`, then restart the game:

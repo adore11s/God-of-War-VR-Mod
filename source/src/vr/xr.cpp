@@ -827,6 +827,13 @@ bool CreateSession(ID3D11Device* dev) {
     }
     Log("xr: session created; swapchains %ux%u / %ux%u fmt=%lld x%zu images", g_eye[0].w, g_eye[0].h, g_eye[1].w,
         g_eye[1].h, g_format, g_eye[0].images.size());
+    // owner 2026-10-18: the picture follows the eye image size the runtime asks for (rendersize.cpp)
+    uint32_t eyePx = 0;
+    for (const EyeSwap& s : g_eye) {
+        if (s.w > eyePx) eyePx = s.w;
+        if (s.h > eyePx) eyePx = s.h;
+    }
+    frame::SetRuntimeEyeSize((int)eyePx);
     if (g_actionSet) AttachActions();
     return CreateBlit();
 }

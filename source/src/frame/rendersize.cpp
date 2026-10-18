@@ -99,8 +99,21 @@ BOOL WINAPI hk_GetWindowPlacement(HWND w, WINDOWPLACEMENT* p) {
     return ok;
 }
 
-// render_size: N (512..8192, a multiple of 8), 0 / below 512 = the game's own size
+// Owner 2026-10-18: the picture is the size the runtime asks for (SteamVR: its resolution setting, VDXR: Virtual
+// Desktop's VR Graphics Quality). Quest testers on VDXR drew 2048 into 2688x2880 eye images - stretched up a third,
+// blurry on a Quest's sharper screen. 0 = no session yet.
+std::atomic<int> g_eyePx{0};
+int AutoSize() {
+    const int v = g_eyePx.load();
+    if (v <= 0 || config::GetFloat("render_size_auto", 1.f) < 0.5f) return 0;
+    const int n = (v + 7) & ~7;  // the larger side of the eye image, rounded up to a multiple of 8
+    return n < 512 ? 512 : n > 8192 ? 8192 : n;
+}
+
+// render_size: N (512..8192, a multiple of 8), 0 / below 512 = the game's own size; with a session the automatic size
+// instead (render_size_auto=1, the default)
 int ConfiguredSize() {
+    if (const int a = AutoSize()) return a;
     const int v = (int)config::GetFloat("render_size", 2048.f);
     return v >= 512 && v <= 8192 ? (v & ~7) : 0;
 }
@@ -219,14 +232,27 @@ bool RenderSizeExpected(bool flatFrame, uint32_t* w, uint32_t* h) {
     return true;
 }
 
+void SetRuntimeEyeSize(int px) {
+    if (px == g_eyePx.exchange(px)) return;
+    if (px > 0) {
+        const int a = AutoSize();
+        if (a) Log("rendersize: the runtime asks for %dpx eye images - the picture is %dx%d (render_size_auto=1)", px, a, a);
+        else Log("rendersize: the runtime asks for %dpx eye images - the picture stays render_size (render_size_auto=0)", px);
+    }
+}
+
+int AutoRenderSize() { return AutoSize(); }
+bool RuntimeEyeSizeKnown() { return g_eyePx.load() > 0; }
+
 void RenderSizeDiagText(char* out, size_t n) {
     RECT c{};
     HWND w = g_wnd.load();
     if (o_GetClientRect && w) o_GetClientRect(w, &c);
     const uint64_t s = g_spoof.load();
-    sprintf_s(out, n, "square picture %s (render_size %d), the game told %ux%u, desktop window %s %ldx%ld "
+    sprintf_s(out, n, "square picture %s (render_size %d%s), the game told %ux%u, desktop window %s %ldx%ld "
               "(desktop_window %d, own %dx%d), client size asks answered %llu",
-              g_square ? "ON" : "off", ConfiguredSize(), (unsigned)(s >> 32), (unsigned)(s & 0xffffffffu),
+              g_square ? "ON" : "off", ConfiguredSize(), AutoSize() ? ", auto" : "", (unsigned)(s >> 32),
+              (unsigned)(s & 0xffffffffu),
               g_shrunk.load() ? "small" : "the game's", c.right - c.left, c.bottom - c.top, g_windowPx, g_ownW, g_ownH,
               (unsigned long long)g_spoofs.load());
 }

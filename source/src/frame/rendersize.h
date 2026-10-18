@@ -18,6 +18,13 @@ void RenderSizeTick(IDXGISwapChain* sc, bool vrRunning);
 // Render thread: the game frame size a stereo (flatFrame false) or flat 2D screen frame should have now - a frame of
 // another size is from the switch between them (the game resizes a frame or two later) and is not shown. False = any.
 bool RenderSizeExpected(bool flatFrame, uint32_t* w, uint32_t* h);
+// xr.cpp, each session: the larger side of the eye image the runtime asks for. The picture is that size (gowvr.ini
+// render_size_auto=1, the default) instead of render_size.
+void SetRuntimeEyeSize(int px);
+// the automatic picture size in use now, 0 = render_size is
+int AutoRenderSize();
+// a session told its eye image size (the panel offers "Auto")
+bool RuntimeEyeSizeKnown();
 // VR summary / VR check line (log)
 void RenderSizeDiagText(char* out, size_t n);
 

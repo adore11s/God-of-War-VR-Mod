@@ -38,7 +38,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
 - **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (set in the VR settings panel).
 - **Smooth or snap turning** in first person, set in the VR settings panel.
-- **A square VR picture** in the size you choose, whatever your monitor's resolution.
+- **A square VR picture** that matches your headset's resolution automatically (or a size you choose), whatever your monitor's resolution.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
 
 ## Before you install
