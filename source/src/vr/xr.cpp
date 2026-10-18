@@ -135,6 +135,8 @@ ID3DDeviceContextState* g_blitState = nullptr;
 ID3D11VertexShader* g_vs = nullptr;
 ID3D11PixelShader* g_ps = nullptr;
 ID3D11PixelShader* g_psHud = nullptr;  // the HUD layer: premultiplied gamma -> premultiplied linear (sRGB target)
+ID3D11PixelShader* g_psCrop = nullptr;  // the eye blit cropped to the eye's own frustum (g_cropCb = the source rect)
+ID3D11Buffer* g_cropCb = nullptr;
 ID3D11SamplerState* g_samp = nullptr;
 ID3D11RasterizerState* g_rs = nullptr;
 
@@ -684,6 +686,8 @@ V vs(uint id : SV_VertexID) {
 }
 float3 lin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
 float4 ps(V i) : SV_Target { return float4(lin(saturate(src.Sample(smp, i.uv).rgb)), 1); }
+cbuffer Crop : register(b0) { float4 srcRect; };  // u0 v0 width height of the part of src to copy
+float4 ps_crop(V i) : SV_Target { return float4(lin(saturate(src.Sample(smp, srcRect.xy + i.uv * srcRect.zw).rgb)), 1); }
 float4 ps_hud(V i) : SV_Target {
     float4 c = src.Sample(smp, i.uv);
     float a = saturate(c.a);
@@ -715,6 +719,14 @@ bool CreateBlit() {
         hb->Release();
     }
     if (!g_psHud) Log("xr: HUD layer shader unavailable - the HUD is pasted into the eye images");
+    ID3DBlob* cb = nullptr;
+    if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "ps_crop", "ps_5_0", 0, 0, &cb, &err))) {
+        if (FAILED(g_dev->CreatePixelShader(cb->GetBufferPointer(), cb->GetBufferSize(), nullptr, &g_psCrop))) g_psCrop = nullptr;
+        cb->Release();
+    }
+    D3D11_BUFFER_DESC bd{16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    if (g_psCrop && FAILED(g_dev->CreateBuffer(&bd, nullptr, &g_cropCb))) g_cropCb = nullptr;
+    if (!g_psCrop || !g_cropCb) Log("xr: eye crop shader unavailable - the eyes are submitted with the rendered frustum");
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -732,7 +744,7 @@ bool CreateBlit() {
 }
 
 void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
-             uint32_t w, uint32_t h);
+             uint32_t w, uint32_t h, ID3D11Buffer* cb = nullptr);
 
 void Blit(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h) {
     ID3D11ShaderResourceView* srv = nullptr;
@@ -741,9 +753,34 @@ void Blit(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetVie
     srv->Release();
 }
 
-// a full-screen pass of `ps` sampling `srv` into the top-left w x h of `rtv`
+// Owner 2026-10-18 (port of the B2S VR mod 0.17.16 fix): the game renders each eye with a symmetric frustum wider than
+// the eye's own asymmetric one (headcam.cpp). Submitting that wider frustum is valid OpenXR and fine on SteamVR, but
+// over Quest Link (Meta's runtime) near people and objects came out doubled. Now only the part of the image the eye's
+// own frustum covers is copied, and the layer reports exactly the frustum the runtime gave.
+struct UvRect { float u0, v0, u1, v1; };  // in the rendered image, v down
+// The part of an image rendered with frustum `r` that frustum `o` covers, clamped to the image.
+UvRect CropToFov(const Fov& r, const Fov& o) {
+    const auto clamp01 = [](float v) { return v < 0.f ? 0.f : v > 1.f ? 1.f : v; };
+    const float rl = tanf(r.left), rr = tanf(r.right), ru = tanf(r.up), rd = tanf(r.down);
+    const float w = rr - rl, h = ru - rd;
+    if (!(w > 0.f) || !(h > 0.f)) return {0.f, 0.f, 1.f, 1.f};
+    return {clamp01((tanf(o.left) - rl) / w), clamp01((ru - tanf(o.up)) / h), clamp01((tanf(o.right) - rl) / w),
+            clamp01((ru - tanf(o.down)) / h)};
+}
+
+void BlitCrop(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h,
+              const UvRect& c) {
+    ID3D11ShaderResourceView* srv = nullptr;
+    if (FAILED(g_dev->CreateShaderResourceView(src, nullptr, &srv))) return;
+    const float rect[4] = {c.u0, c.v0, c.u1 - c.u0, c.v1 - c.v0};
+    ctx->UpdateSubresource(g_cropCb, 0, nullptr, rect, 0, 0);
+    BlitSrv(ctx, srv, g_psCrop, rtv, w, h, g_cropCb);
+    srv->Release();
+}
+
+// a full-screen pass of `ps` sampling `srv` into the top-left w x h of `rtv` (`cb`: its constant buffer b0)
 void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
-             uint32_t w, uint32_t h) {
+             uint32_t w, uint32_t h, ID3D11Buffer* cb) {
     ID3DDeviceContextState* prev = nullptr;
     ctx->SwapDeviceContextState(g_blitState, &prev);  // the game's whole pipeline state is parked in `prev`
     D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
@@ -753,6 +790,7 @@ void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11Pix
     ctx->PSSetShader(ps, nullptr, 0);
     ctx->PSSetShaderResources(0, 1, &srv);
     ctx->PSSetSamplers(0, 1, &g_samp);
+    if (cb) ctx->PSSetConstantBuffers(0, 1, &cb);
     ctx->RSSetState(g_rs);
     ctx->RSSetViewports(1, &vp);
     ctx->OMSetRenderTargets(1, &rtv, nullptr);
@@ -1474,7 +1512,14 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         g_monoRun = 0;
     }
     XrCompositionLayerProjectionView pv[2] = {};
+    XrFovf renderedFov[2] = {};  // the frustum the eye image was rendered with (the HUD quads are placed in it)
     bool ok = src[0] && src[1] && g_frame.shouldRender && g_viewsValid;
+    // the eye images cropped to the eyes' own frustums (CropToFov). gowvr.ini crop_to_eye_fov: 2 (default) = on every
+    // runtime but SteamVR - SteamVR shows the wider frustum right, and its 5 deg margin (headcam.cpp) keeps black edges
+    // out of a reprojected fast head turn; 1 = always, 0 = never (the rendered frustum, as before)
+    static const int cropMode = (int)config::GetFloat("crop_to_eye_fov", 2.f);
+    const bool cropOn = cropMode == 1 || (cropMode == 2 && !strstr(g_runtimeName, "SteamVR"));
+    const bool crop = cropOn && !bb && used && used->valid && used->hasOwnFov && g_psCrop && g_cropCb;
     for (int e = 0; e < 2 && ok; ++e) {
         EyeSwap& s = g_eye[e];
         const int idx = AcquireReady(s, e ? "eye 1" : "eye 0");  // D-110
@@ -1482,17 +1527,29 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
             ok = false;
             break;
         }
-        Blit(ctx, src[e], s.rtvs[idx], s.w, s.h);
+        if (crop) {
+            const UvRect c = CropToFov(used->fov[e], used->ownFov[e]);
+            BlitCrop(ctx, src[e], s.rtvs[idx], s.w, s.h, c);
+            static UvRect logged[2] = {{-1.f, -1.f, -1.f, -1.f}, {-1.f, -1.f, -1.f, -1.f}};
+            if (fabsf(c.u0 - logged[e].u0) + fabsf(c.u1 - logged[e].u1) + fabsf(c.v0 - logged[e].v0) +
+                    fabsf(c.v1 - logged[e].v1) > 0.01f) {
+                logged[e] = c;
+                Log("xr: eye %d image cropped to its own frustum: u %.3f..%.3f v %.3f..%.3f", e, c.u0, c.u1, c.v0, c.v1);
+            }
+        } else {
+            Blit(ctx, src[e], s.rtvs[idx], s.w, s.h);
+        }
         const bool cap = g_hmdReq.load();
         if (cap) HmdCapture(ctx, e, s.images[idx]);
         ReleaseImage(s);
         pv[e].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         if (used && used->valid) {
             memcpy(&pv[e].pose, &used->pose[e], sizeof(XrPosef));
-            memcpy(&pv[e].fov, &used->fov[e], sizeof(XrFovf));
+            memcpy(&renderedFov[e], &used->fov[e], sizeof(XrFovf));
+            memcpy(&pv[e].fov, crop ? &used->ownFov[e] : &used->fov[e], sizeof(XrFovf));
         } else {
             pv[e].pose = g_views[e].pose;
-            pv[e].fov = g_views[e].fov;
+            pv[e].fov = renderedFov[e] = g_views[e].fov;
         }
         pv[e].subImage = {s.sc, {{0, 0}, {(int32_t)s.w, (int32_t)s.h}}, 0};
         if (cap) {
@@ -1532,7 +1589,7 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         ctx->ClearRenderTargetView(g_hudSc[e].rtvs[idx], clear);
         BlitSrv(ctx, hsrv, g_psHud, g_hudSc[e].rtvs[idx], qw, qh);
         ReleaseImage(g_hudSc[e]);
-        const XrFovf& f = pv[e].fov;
+        const XrFovf& f = renderedFov[e];  // (not pv's: the HUD was placed in the rendered frustum, sharpui.cpp)
         const float D = 2.f, tl = tanf(f.angleLeft), tr = tanf(f.angleRight), tu = tanf(f.angleUp), td = tanf(f.angleDown);
         const float local[3] = {D * 0.5f * (tl + tr), D * 0.5f * (tu + td), -D};  // the frustum's middle at D metres
         const float* q = &pv[e].pose.orientation.x;

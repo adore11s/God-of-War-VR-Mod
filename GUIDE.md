@@ -129,6 +129,7 @@ Most useful settings:
 | `turn_snap` / `turn_speed` / `snap_turn_degrees` | 0 / 1.0 / 45 | First-person turning: smooth at a speed, or snap turns |
 | `walls_f1` | 1 | 0 = no wall collision in first person |
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
+| `crop_to_eye_fov` | 2 | Sends each eye's picture in exactly the shape the headset asks for (fixes doubled near objects on Quest Link). 2 = on every runtime except SteamVR, 1 = always, 0 = never |
 
 ---
 

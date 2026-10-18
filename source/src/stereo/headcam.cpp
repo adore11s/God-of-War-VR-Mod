@@ -158,8 +158,11 @@ bool HeadcamPrepare() {
     g_prepTx = g_hmdFov ? tx : 0.f;
     g_prepTy = g_hmdFov ? ty : 0.f;
     g_prepUsed = v;
-    for (int e = 0; e < 2; ++e)
+    for (int e = 0; e < 2; ++e) {
+        g_prepUsed.ownFov[e] = v.fov[e];  // the eye's own frustum: xr.cpp crops the image to it and submits it
         g_prepUsed.fov[e] = {-atanf(tx), atanf(tx), atanf(ty), -atanf(ty)};  // exactly what this frame renders
+    }
+    g_prepUsed.hasOwnFov = g_hmdFov;
     g_prepValid = true;
     uint64_t k = ++g_prepared;
     if (k <= 2 || k % 900 == 0)

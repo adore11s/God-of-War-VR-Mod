@@ -12,6 +12,10 @@ struct EyeViews {
     bool valid = false;
     Pose pose[2];
     Fov fov[2];
+    // the runtime's own (asymmetric) frustum of each eye, when `fov` is the wider symmetric one the game renders
+    // (headcam.cpp): the eye image is cropped to it and the layer reports it (Quest Link: near objects doubled)
+    Fov ownFov[2];
+    bool hasOwnFov = false;
     int64_t displayTime = 0;
     int64_t period = 0;  // predicted display period (ns)
     uint64_t serial = 0;
