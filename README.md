@@ -54,8 +54,6 @@ Start the game normally once and, in its graphics settings:
 - turn **DLSS** on if you have an NVIDIA graphics card (recommended),
 - turn **HDR** off.
 
-**Graphics preset:** Play on the **Low** preset. If your PC can handle it, try the **Original** preset.
-
 ## Install
 
 1. Open your God of War folder. In Steam: right-click the game → **Manage** → **Browse local files**. In the Epic Games Launcher: the game's **⋯** menu → **Manage** → the folder icon. In GOG Galaxy: the game's settings icon → **Manage installation** → **Show folder**.
