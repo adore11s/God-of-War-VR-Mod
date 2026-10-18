@@ -6,6 +6,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 ## Important: read before playing
 
+- **Only want to play in third person?** Then you don't need any of the first-person points below (the shortcuts, hands, weapon draws, finishers and fists). The game starts in third person and your VR controllers work like a normal gamepad.
 - **Remember the two first-person shortcuts.**
   - **First person during gameplay:** press the **right trigger next to your head**.
   - **First person during cutscenes:** **hold** the **right trigger next to your head**.
