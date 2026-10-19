@@ -12,7 +12,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **First person during cutscenes:** **hold** the **right trigger next to your head**.
 - **Tested:** only the first 2 hours of the game. Later parts may break or crash.
 - **Hands wrong or button prompt missing:** switch to third person and back (**right trigger next to your head** twice).
-- **Axe wrong in first person:** swing it a few times in third person, then switch back. Or put it away, switch to third person and back.
+- **Axe position wrong in first person:** swing it a few times in third person, then switch back. Or put it away, switch to third person and back.
 - **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too.
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
@@ -81,6 +81,7 @@ None of these files contain your user name or other personal information.
 
 ## Known bugs (fixes coming soon)
 
+- **The axe position in first person can be wrong** (see *Important: read before playing* for the workaround).
 - **Some of the interface is missing in first person** (the health and Spartan Rage bars).
 - **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
