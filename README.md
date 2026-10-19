@@ -6,21 +6,19 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 ## Important: read before playing
 
-- **The axe sits wrong in first person?** Swing it a few times in third person, then switch back to first person. Or put the axe away in first person, switch to third person and back to first person.
-- **You don't have to change any game settings.** The installer sets them for you (and tells you if it couldn't).
-- **Only want to play in third person?** Then you don't need any of the first-person points below (the shortcuts, hands, weapon draws, finishers and fists). The game starts in third person and your VR controllers work like a normal gamepad.
-- **Remember the two first-person shortcuts.**
-  - **First person during gameplay:** press the **right trigger next to your head**.
-  - **First person during cutscenes:** **hold** the **right trigger next to your head**.
-- **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
-- **Your hands feel in the wrong place or don't move right, or you can't see a button prompt in first person?** Quickly switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
-- **Turn on DLSS if you have an NVIDIA graphics card.** It now works properly in VR: sharp, stable edges and better performance.
-- **Opening the menus:** **tap** all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**) for the Options / ☰ button; **hold** them for the game menu (map, skills, inventory). On Meta Quest the left controller's **☰** button works as Options / ☰ too.
-- **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision, the VR picture size and the finishers perspective. Point a controller at an option and pull its trigger.
-- **Equipping the axe:** reach over your **right shoulder** with **either hand** and press that hand's **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
-- **Equipping the Blades of Chaos:** reach over your **left shoulder** with **either hand** and press that hand's **grip button**.
-- **Finishers:** face the enemy directly in front of you. A finisher from behind the enemy doesn't work. In the VR settings panel, **Finishers Perspective** picks whether finishers play in **first person** or in **third person** (the game's own camera).
-- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** (and others without finger sensing) can't feel resting fingers: **hold Y** to make fists with both hands. The left grip is only the shield.
+- **Only playing in third person?** Skip the first-person points below. Your controllers work like a gamepad.
+- **Game settings:** no need to change them. The installer does it.
+- **First person during gameplay:** press the **right trigger next to your head**.
+- **First person during cutscenes:** **hold** the **right trigger next to your head**.
+- **Tested:** only the first 2 hours of the game. Later parts may break or crash.
+- **Hands wrong or button prompt missing:** switch to third person and back (**right trigger next to your head** twice).
+- **Axe wrong in first person:** swing it a few times in third person, then switch back. Or put it away, switch to third person and back.
+- **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too.
+- **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
+- **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
+- **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
+- **Finishers:** face the enemy from the front. Pick first or third person in the VR settings panel.
+- **Fists:** rest your fingers on the grips. Squeezing the left grip fully is the shield. Meta Quest: **hold Y**.
 
 ## What the mod does
 
