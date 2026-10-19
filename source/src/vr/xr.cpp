@@ -22,6 +22,10 @@
 #include <string>
 #include <vector>
 
+#ifdef GOWVR_OPENXR_LOADER
+// the official OpenXR loader's entry point (openxr_loader.lib, C linkage; vcpkg x64-windows-static)
+extern "C" xr::XrResult __stdcall xrGetInstanceProcAddr(xr::XrInstance, const char*, xr::PFN_xrVoidFunction*);
+#endif
 using namespace xr;
 
 namespace gowvr::vr {
@@ -499,6 +503,17 @@ bool LoadRuntime() {
         }
     }
     sprintf_s(g_runtimeJson, "%ls (%s)", json, envLen > 0 && envLen < MAX_PATH ? "XR_RUNTIME_JSON" : "system default");
+#ifdef GOWVR_OPENXR_LOADER
+    // Owner 2026-10-19 (Meta Link + Meta's OpenXR runtime: "VR doesn't work at all"; the Beyond: Two Souls VR mod, which
+    // works there, uses the loader): the official OpenXR loader (linked statically) picks the same runtime (XR_RUNTIME_JSON,
+    // else the system's active one), negotiates with it and runs any installed API layers - the path every OpenXR game
+    // takes. gowvr.ini xr_loader 0 = the runtime loaded directly, as before.
+    if (config::GetFloat("xr_loader", 1.f) > 0.5f) {
+        gipa = (PFN_xrGetInstanceProcAddr)&::xrGetInstanceProcAddr;
+        Log("xr: runtime %ls through the official OpenXR loader", json);
+        return true;
+    }
+#endif
     FILE* f = nullptr;
     if (_wfopen_s(&f, json, L"rb") || !f) { Log("xr: cannot open %ls", json); return false; }
     char text[8192] = {};

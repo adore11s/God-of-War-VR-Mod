@@ -106,5 +106,6 @@ None of these files contain your user name or other personal information.
 
 The mod is free and open source under the **MIT license**. The full source code is in the [`source`](source) folder.
 Anyone can fix, improve or build on it: see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+The mod includes the official OpenXR loader and JsonCpp: see **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.
 
 *Not affiliated with Sony Interactive Entertainment or Santa Monica Studio. No game files are included.*

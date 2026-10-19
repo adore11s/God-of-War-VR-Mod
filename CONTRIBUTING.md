@@ -11,6 +11,10 @@ cmake -S source -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
+Released builds link the official **OpenXR loader** statically (needed for Meta's runtime over Link):
+`vcpkg install openxr-loader:x64-windows-static` into `C:\vcpkg` (or point `CMAKE_PREFIX_PATH` at your vcpkg
+`installed\x64-windows-static`). Without it the build still works and loads the VR runtime directly.
+
 This produces `build\Release\version.dll`. To try it, copy it next to `GoW.exe` and start the game. On its first start
 it writes the default `gowvr.ini` (`files\gowvr.ini`, built into the DLL).
 

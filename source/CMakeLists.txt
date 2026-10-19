@@ -80,6 +80,18 @@ target_include_directories(gowvr PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gen")  # d
 target_compile_definitions(gowvr PRIVATE GOWVR_VERSION="${GOWVR_GIT}" WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(gowvr PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
 target_link_libraries(gowvr PRIVATE d3d11 dxgi dxguid psapi bcrypt windowscodecs ole32)
+# Owner 2026-10-19 (Meta Link: "VR doesn't work at all"; the Beyond: Two Souls VR mod, which works there, links it): the
+# official OpenXR loader, static (vcpkg x64-windows-static, no extra DLL), finds and starts the runtime like every OpenXR
+# game. Without it (a build machine with no vcpkg) the runtime is loaded directly, as before.
+list(APPEND CMAKE_PREFIX_PATH "C:/vcpkg/installed/x64-windows-static")
+find_package(OpenXR CONFIG QUIET)
+if(TARGET OpenXR::openxr_loader)
+  target_link_libraries(gowvr PRIVATE OpenXR::openxr_loader)
+  target_compile_definitions(gowvr PRIVATE GOWVR_OPENXR_LOADER=1)
+  message(STATUS "gowvr: official OpenXR loader linked (static)")
+else()
+  message(STATUS "gowvr: OpenXR loader not found - the runtime is loaded directly")
+endif()
 # D-108: release builds keep symbols (version.pdb, archived per build by tools/install.ps1) so a crash offset in the
 # mod maps to a function; /Zi does not change code generation, /OPT:REF /OPT:ICF keep the release linker settings
 target_compile_options(gowvr PRIVATE $<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:CXX>>:/Zi>)
