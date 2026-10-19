@@ -6,12 +6,12 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 ## Important: read before playing
 
+- **The axe sits wrong in first person?** Swing it a few times in third person, then switch back to first person. Or put the axe away in first person, switch to third person and back to first person.
+- **You don't have to change any game settings.** The installer sets them for you (and tells you if it couldn't).
 - **Only want to play in third person?** Then you don't need any of the first-person points below (the shortcuts, hands, weapon draws, finishers and fists). The game starts in third person and your VR controllers work like a normal gamepad.
 - **Remember the two first-person shortcuts.**
   - **First person during gameplay:** press the **right trigger next to your head**.
   - **First person during cutscenes:** **hold** the **right trigger next to your head**.
-- **The first-person view sits slightly off Kratos' head, on purpose.** Seen from exactly where his eyes are, his shoulder armour blocks the view, so the camera sits a little in front of and above that spot.
-- **For the best experience, play with SteamVR.** Early playtesters had fewer problems on SteamVR than on Virtual Desktop's VDXR (flickering lights and such). Controllers with finger sensing on the grip buttons, like the **PlayStation VR2** controllers, work best.
 - **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
 - **Your hands feel in the wrong place or don't move right, or you can't see a button prompt in first person?** Quickly switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
 - **Turn on DLSS if you have an NVIDIA graphics card.** It now works properly in VR: sharp, stable edges and better performance.
@@ -41,15 +41,6 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Finishers in first or third person**, set in the VR settings panel.
 - **A square VR picture** that matches your headset's resolution automatically (or a size you choose), whatever your monitor's resolution.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
-
-## Before you install
-
-Start the game normally once, then close it. The installer then sets the game's graphics settings for VR by itself:
-
-- **Display mode** **Windowed**, **VSync** off, **frame rate limit** off, **Motion blur** **0**, **HDR** off,
-- it asks whether you use **DLSS** (recommended with an NVIDIA graphics card) and which preset (**Ultra Performance**, **Performance**, **Balanced** or **Quality**); without DLSS it turns DLSS off.
-
-If it can't change a setting, it tells you which ones to set yourself in the game's graphics settings. The uninstaller puts your old values back.
 
 ## Install
 
@@ -95,7 +86,7 @@ None of these files contain your user name or other personal information.
 - **Some of the interface is missing in first person** (the health and Spartan Rage bars).
 - **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
-- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Use SteamVR for now.
+- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Try AFR rendering (VR settings panel: Rendering Method).
 - **Button prompts can go missing in first person** (see *Important: read before playing* for the workaround).
 
 ## Open source
