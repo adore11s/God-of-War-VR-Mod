@@ -15,13 +15,11 @@ bool SceneAnimating();
 // Player is in the boat (boarding/leaving transitions of the boat's docking state machine).
 bool InBoat();
 uint64_t HeroWorldPassCount();
-// F7 "arms only": in gameplay first person the body is hidden except the two arms (gowvr.ini hide_body).
-void SetHideBody(bool on);
 // Render thread side of the hide lists: shrink right before the frame's render kicks, restore right after them.
 void BodyHideDrawBegin();
 void BodyHideDrawEnd();
 void BodyHideEnsure();  // D-082: re-shrink the neck before a kick if a pass put it back
-bool HideBody();
+bool HideBody();  // always false: the F7 "arms only" mode was removed (owner 2026-10-19)
 // The Leviathan axe is attached to the (IK) right hand right now (read by the arms: closed fist).
 bool AxeInHand();
 // D-153: the drawn (VR) axe as a segment grip -> head, this frame and the previous one (world); false when not recent

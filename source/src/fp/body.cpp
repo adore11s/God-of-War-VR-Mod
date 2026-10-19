@@ -6533,12 +6533,9 @@ void BodyHideDrawEnd() {
     }
     CarriedRestore(nullptr);
 }
-void SetHideBody(bool on) { g_hideBody = on; config::SetFloat("hide_body", on ? 1.f : 0.f); Log("fp: F7 arms only %s", on ? "ON" : "off"); }
-bool HideBody() {
-    static bool loaded = false;
-    if (!loaded) { loaded = true; g_hideBody = config::GetFloat("hide_body", 0.f) > 0.5f; }
-    return g_hideBody.load();
-}
+// Owner 2026-10-19: the F7 "arms only" key is removed altogether - the whole body always shows in first person (a
+// gowvr.ini hide_body=1 left from an older version is ignored, g_hideBody stays off)
+bool HideBody() { return false; }
 void AxeTrace(int n) { g_axeTrace = n; Log("axetrace: next %d passes", n); }
 void AxeDiag(int n) { g_axeDiag = n; Log("axediag: next %d axe passes", n); }
 bool AxeInHand() { return g_axeInHand.load(); }

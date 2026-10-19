@@ -121,7 +121,6 @@ Most useful settings:
 | `ui_scale` / `ui_scale_fp` | 0.35 / 0.5 | HUD size in third / first person |
 | `pad_mode` | 0 | 0 = Xbox icons, 1 = PlayStation icons (F10 / F11 change it) |
 | `rumble_strength` | 1.0 | Controller rumble strength (0 = off) |
-| `hide_body` | 0 | 1 = only the arms in first person (F7) |
 | `screen_dist` / `screen_width` | 2.2 / 3.4 | Distance and size of the floating screen, in metres |
 | `render_size` | 2048 | VR picture size per eye (square) when `render_size_auto` is 0; 0 = the game's own resolution |
 | `render_size_auto` | 1 | The picture size matches what the headset asks for ("Auto" in the VR settings panel). 0 = use `render_size` |

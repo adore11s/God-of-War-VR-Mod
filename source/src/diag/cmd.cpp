@@ -613,8 +613,7 @@ DWORD WINAPI Poll(void*) {
     Log("cmd: autovr %s", autovr ? "on (VR starts as soon as the game draws)" : "off");
     if (autovr && autovrDelay > 0.f) Log("cmd: autovr waits %.0f s more (gowvr.ini autovr_delay)", autovrDelay);
     bool autovrDone = false;
-    bool vrOn = false, f8 = false, f9 = false, f1 = false, f3 = false, f5 = false, f6 = false, f7 = false, f10 = false, f11 = false;
-    fp::HideBody();  // load gowvr.ini hide_body
+    bool vrOn = false, f8 = false, f9 = false, f1 = false, f3 = false, f5 = false, f6 = false, f10 = false, f11 = false;
     for (;;) {
         Sleep(100);
         ++tick;
@@ -655,9 +654,6 @@ DWORD WINAPI Poll(void*) {
         }();
         auto Key = [gameFront](int vk) { return gameFront && (GetAsyncKeyState(vk) & 0x8000) != 0; };
         bool k8 = Key(VK_F8), k9 = Key(VK_F9);
-        bool k7 = Key(VK_F7);
-        if (k7 && !f7) fp::SetHideBody(!fp::HideBody());  // F7: arms only in gameplay first person
-        f7 = k7;
         bool k1 = Key(VK_F1), k3 = Key(VK_F3);
         bool k5 = Key(VK_F5), k6 = Key(VK_F6);
         // D-111: the Xbox pad / the game's PlayStation pad (PlayStation button prompts, PSVR2). D-217 (owner): F10 = Xbox,
