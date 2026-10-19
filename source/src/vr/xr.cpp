@@ -1434,13 +1434,14 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         Log("summary: fixes (gowvr.ini key = value, 0 = off): xr_loader = %.0f (%s) | crop_to_eye_fov = %d (%s) | "
             "xr_dither = %.0f | eye_history_fix = %.0f | skin_per_frame = %.0f | jitter_per_frame = %.0f | dlss_per_eye = %.0f | "
             "dlss_vr_phases = %.0f | dlss_vr_sharpness = %.2f | mv_health = %.0f | render_size_auto = %.0f | ui_reticle_mode = %.0f | "
-            "finisher_third_person = %.0f | hud_layer = %.0f | sharp_ui = %.0f",
+            "finisher_third_person = %.0f | hud_layer = %.0f | sharp_ui = %.0f | hold_bad_poses = %.0f",
             config::GetFloat("xr_loader", 1.f), loader, crop, cropActive ? "active" : "not on this runtime",
             config::GetFloat("xr_dither", 1.f), config::GetFloat("eye_history_fix", 1.f), config::GetFloat("skin_per_frame", 1.f),
             config::GetFloat("jitter_per_frame", 1.f), config::GetFloat("dlss_per_eye", 1.f),
             config::GetFloat("dlss_vr_phases", 0.f), config::GetFloat("dlss_vr_sharpness", 0.f), config::GetFloat("mv_health", 1.f),
             config::GetFloat("render_size_auto", 1.f), config::GetFloat("ui_reticle_mode", 2.f),
-            config::GetFloat("finisher_third_person", 0.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f));
+            config::GetFloat("finisher_third_person", 0.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f),
+            config::GetFloat("hold_bad_poses", 1.f));
     }
     Log("summary: pad_mode %.0f, autovr %.0f, dlss_per_eye %.0f, hit_radius %.2f, hit_radius_fist %.2f",
         config::GetFloat("pad_mode", 0.f), config::GetFloat("autovr", 1.f), config::GetFloat("dlss_per_eye", 1.f),
@@ -1765,6 +1766,57 @@ void RumbleTick() {
     }
 }
 
+// Owner 2026-10-19 (as the Beyond: Two Souls VR mod): a located eye pair is only used when the runtime marks its rotation
+// AND position valid and the numbers are sane (finite, a normalisable rotation, a position within 1 km); streaming setups
+// (Virtual Desktop, Link) drop tracking for a moment more often than a cable. Rotation fine but position not: the new
+// rotation with the last good position (looking around still works); rotation not fine: the whole last good pose. Used by
+// both lookups (the frame's views and the head camera's predicted ones). gowvr.ini hold_bad_poses 0 = only the
+// rotation flag, as before.
+SRWLOCK g_goodLock = SRWLOCK_INIT;
+XrPosef g_goodPose[2]{};
+bool g_haveGood = false;
+std::atomic<uint64_t> g_badPoses{0}, g_badRun{0};
+bool SanePoses(XrView views[2], XrFlags64 flags) {
+    static const bool hold = config::GetFloat("hold_bad_poses", 1.f) > 0.5f;
+    if (!hold) return (flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+    bool rotOk = (flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+    bool posOk = (flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+    for (int e = 0; e < 2; ++e) {
+        XrQuaternionf& q = views[e].pose.orientation;
+        const float n2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+        if (!std::isfinite(n2) || n2 < 0.25f || n2 > 2.25f) rotOk = false;
+        else { const float s = 1.f / sqrtf(n2); q.x *= s; q.y *= s; q.z *= s; q.w *= s; }
+        const XrVector3f& p = views[e].pose.position;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || fabsf(p.x) + fabsf(p.y) + fabsf(p.z) > 1000.f)
+            posOk = false;
+    }
+    AcquireSRWLockExclusive(&g_goodLock);
+    if (rotOk && posOk) {
+        g_goodPose[0] = views[0].pose;
+        g_goodPose[1] = views[1].pose;
+        g_haveGood = true;
+        ReleaseSRWLockExclusive(&g_goodLock);
+        const uint64_t run = g_badRun.exchange(0);
+        if (run >= 2) Log("xr: tracking back after %llu bad pose(s) - the headset's own pose again", (unsigned long long)run);
+        return true;
+    }
+    if (!g_haveGood) {  // nothing good yet: as before (the rotation flag decides)
+        ReleaseSRWLockExclusive(&g_goodLock);
+        return rotOk;
+    }
+    for (int e = 0; e < 2; ++e) {
+        if (!rotOk) views[e].pose = g_goodPose[e];
+        else views[e].pose.position = g_goodPose[e].position;
+    }
+    ReleaseSRWLockExclusive(&g_goodLock);
+    const uint64_t total = ++g_badPoses, run = ++g_badRun;
+    if (run == 1 || total % 900 == 0)
+        Log("xr: tracking dropout (view flags 0x%llx: rotation %s, position %s) - holding the last good %s (%llu bad poses "
+            "so far)", (unsigned long long)flags, rotOk ? "ok" : "BAD", posOk ? "ok" : "BAD",
+            rotOk ? "position" : "pose", (unsigned long long)total);
+    return true;
+}
+
 void BeginFrame() {
     XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
     g_frame = XrFrameState{XR_TYPE_FRAME_STATE};
@@ -1793,7 +1845,7 @@ void BeginFrame() {
     uint32_t n = 0;
     SyncInput(g_frame.predictedDisplayTime);
     g_viewsValid = Succeeded(xrLocateViews(g_sess, &li, &vs, 2, &n, g_views)) && n == 2 &&
-                   (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT);
+                   SanePoses(g_views, vs.viewStateFlags);
     if (g_viewsValid) {
         EyeViews v;
         v.valid = true;
@@ -1811,12 +1863,13 @@ void BeginFrame() {
     uint64_t k = g_frames.load();
     if (k <= 3 || k % 900 == 0)
         Log("xr: frame %llu shouldRender=%u period=%.2f ms views=%d L(%.3f %.3f %.3f) fovL(%.1f %.1f %.1f %.1f) "
-            "submitted=%llu mono=%llu",
+            "submitted=%llu mono=%llu bad_poses=%llu",
             (unsigned long long)k, g_frame.shouldRender, g_frame.predictedDisplayPeriod / 1e6, g_viewsValid,
             g_views[0].pose.position.x, g_views[0].pose.position.y, g_views[0].pose.position.z,
             g_views[0].fov.angleLeft * 57.2958f, g_views[0].fov.angleRight * 57.2958f,
             g_views[0].fov.angleUp * 57.2958f, g_views[0].fov.angleDown * 57.2958f,
-            (unsigned long long)g_submitted.load(), (unsigned long long)g_mono.load());
+            (unsigned long long)g_submitted.load(), (unsigned long long)g_mono.load(),
+            (unsigned long long)g_badPoses.load());
 }
 
 }  // namespace
@@ -1896,8 +1949,7 @@ bool XrLocateAt(int64_t displayTime, EyeViews* out) {
     uint32_t n = 0;
     if (ok) {
         XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, displayTime, g_space};
-        ok = Succeeded(xrLocateViews(g_sess, &li, &vs, 2, &n, views)) && n == 2 &&
-             (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT);
+        ok = Succeeded(xrLocateViews(g_sess, &li, &vs, 2, &n, views)) && n == 2 && SanePoses(views, vs.viewStateFlags);
     }
     ReleaseSRWLockShared(&g_sessLock);
     if (!ok) return false;

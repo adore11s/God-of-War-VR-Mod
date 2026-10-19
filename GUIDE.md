@@ -130,6 +130,7 @@ Most useful settings:
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
 | `xr_loader` | 1 | 0 = start the VR runtime directly instead of through the official OpenXR loader (only if VR stopped starting) |
 | `xr_dither` | 1 | 0 = no dithering of the picture into the headset (dark gradients may band) |
+| `hold_bad_poses` | 1 | When the headset loses tracking for a moment (more common over Virtual Desktop or Link), the view holds still instead of jumping. 0 = off |
 | `crop_to_eye_fov` | 2 | Sends each eye's picture in exactly the shape the headset asks for (fixes doubled near objects on Quest Link). 2 = on every runtime except SteamVR, 1 = always, 0 = never |
 
 ---
