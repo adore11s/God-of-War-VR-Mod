@@ -679,6 +679,18 @@ FARPROC DlssEyesWrap(const char* name, FARPROC p) {
     return nullptr;
 }
 
+bool DlssFixesActive() {
+    static const bool autoOn = config::GetFloat("dlss_fixes_auto", 1.f) > 0.5f;
+    if (!autoOn) return true;
+    const uint8_t* on = (const uint8_t*)GameVa(kDlssOnVa);
+    const bool dlss = on && *on == 1;
+    static std::atomic<int> last{-1};
+    if (last.exchange(dlss ? 1 : 0) != (dlss ? 1 : 0))
+        Log("dlss: the game's DLSS is %s - the DLSS stereo fixes (eye history, shared jitter phase, eye 1's skinned "
+            "previous pose) %s (D-242)", dlss ? "ON" : "off", dlss ? "on" : "off - the pre-DLSS logic");
+    return dlss;
+}
+
 void DlssVrFrame(bool stereo) {
     uint8_t* on = (uint8_t*)GameVa(kDlssOnVa);
     int* phases = (int*)GameVa(kDlssPhasesVa);

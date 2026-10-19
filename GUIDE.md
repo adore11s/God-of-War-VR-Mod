@@ -31,7 +31,7 @@ Everything beyond the basics in the [README](README.md).
 
 ## Game settings
 
-Set these in the game's graphics settings before you play:
+`Install VR mod.cmd` sets these for you (and asks about DLSS and its preset); if it could not, it lists what to set yourself in the game's graphics settings:
 
 | Setting | Set to | Why |
 |---|---|---|
@@ -46,7 +46,7 @@ Also recommended:
 | Setting | Value |
 |---|---|
 | Film grain | 0 (it reads as noise in a headset) |
-| Display mode | **Windowed** (needed for the square VR picture and the small window) |
+| Display mode | **Windowed** (needed for the square VR picture and the small window; set by the installer) |
 
 **The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. By default it is **Auto**: the size your headset asks for (SteamVR: its resolution setting; Virtual Desktop: its VR Graphics Quality), so every headset gets a sharp picture without changing anything. Pick a fixed size instead if the game runs too slowly; bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
 
@@ -83,7 +83,7 @@ These work while the game window or a SteamVR window is in front.
 | Both stick clicks together | Spartan Rage |
 | Right trigger **next to your head** | First person on / off; **hold** it there for first person in cutscenes |
 
-**Menus:** press all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for the game menu (map, skills, inventory). In the game's settings menu the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
+**Menus:** tap all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for Options / ☰ (the three-lines button); hold them for the game menu (map, skills, inventory). On Meta Quest the left controller's ☰ button is Options / ☰ too. In the game's settings menu the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
 
 ### First person: motion controls
 
@@ -130,6 +130,11 @@ Most useful settings:
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
 | `xr_loader` | 1 | 0 = start the VR runtime directly instead of through the official OpenXR loader (only if VR stopped starting) |
 | `xr_dither` | 1 | 0 = no dithering of the picture into the headset (dark gradients may band) |
+| `afr_rendering` | 0 | 1 = AFR: one eye per frame, the eyes alternating (faster; "Rendering Method" in the VR settings panel) |
+| `hand_smoothing` | 1 | Smooths small hand jitter (fast moves are not slowed). 0 = off |
+| `fist_on_y` | 1 | Controllers without finger sensing (Meta Quest): hold Y for fists. 0 = a light squeeze of the right grip |
+| `hit_reaction_freeze` | 1 | First person: Kratos' body and your view stay still when he is hit. 0 = off |
+| `dlss_fixes_auto` | 1 | The DLSS stereo fixes follow the game's DLSS setting. 0 = always on |
 | `hold_bad_poses` | 1 | When the headset loses tracking for a moment (more common over Virtual Desktop or Link), the view holds still instead of jumping. 0 = off |
 | `crop_to_eye_fov` | 2 | Sends each eye's picture in exactly the shape the headset asks for (fixes doubled near objects on Quest Link). 2 = on every runtime except SteamVR, 1 = always, 0 = never |
 

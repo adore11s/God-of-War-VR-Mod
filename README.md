@@ -14,14 +14,13 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **For the best experience, play with SteamVR.** Early playtesters had fewer problems on SteamVR than on Virtual Desktop's VDXR (flickering lights and such). Controllers with finger sensing on the grip buttons, like the **PlayStation VR2** controllers, work best.
 - **I've only tested the first 2 hours of the game.** Anything beyond that can be broken and might crash.
 - **Your hands feel in the wrong place or don't move right, or you can't see a button prompt in first person?** Quickly switch from first person to third person and back to first person (press the **right trigger next to your head** twice).
-- **You can phase through walls during combat.** Walking backwards into a wall while fighting can push you through it, so keep this in mind.
 - **Turn on DLSS if you have an NVIDIA graphics card.** It now works properly in VR: sharp, stable edges and better performance.
-- **Opening the menu:** press all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**).
+- **Opening the menus:** **tap** all **four face buttons** together on your VR controllers (Meta: **A X Y B**, PlayStation: **✕ ○ □ △**) for the Options / ☰ button; **hold** them for the game menu (map, skills, inventory). On Meta Quest the left controller's **☰** button works as Options / ☰ too.
 - **VR settings:** in the game's settings menu, a **VR settings panel** appears to the right of the menu screen: turning (smooth or snap), controller buttons, wall collision, the VR picture size and the finishers perspective. Point a controller at an option and pull its trigger.
 - **Equipping the axe:** reach over your **right shoulder** with **either hand** and press that hand's **grip button**. To throw it, **hold the left trigger** and make the throwing motion. After throwing the axe, recall it with the **click of the right grip button** or the **left controller's upper button** (PlayStation: **△**, Meta: **Y**).
 - **Equipping the Blades of Chaos:** reach over your **left shoulder** with **either hand** and press that hand's **grip button**.
 - **Finishers:** face the enemy directly in front of you. A finisher from behind the enemy doesn't work. In the VR settings panel, **Finishers Perspective** picks whether finishers play in **first person** or in **third person** (the game's own camera).
-- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** can't feel resting fingers: squeeze the **right grip lightly** to make fists with both hands. The left grip is only the shield.
+- **Fist combat needs your fingers resting on the grip buttons.** Just touching the grips turns the fists on. That is because fully squeezing the left grip brings out the shield. **Meta Quest controllers** (and others without finger sensing) can't feel resting fingers: **hold Y** to make fists with both hands. The left grip is only the shield.
 
 ## What the mod does
 
@@ -29,7 +28,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **DLSS in VR.** Each eye keeps its own DLSS history and motion, so edges stay sharp and stable.
 - **First person** in normal gameplay and in cutscenes. You can see your whole body.
 - **Motion controls in first person:**
-  - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists.
+  - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists (Meta Quest: hold **Y**).
   - **Leviathan Axe:** light attacks, throwing and recalling. Equip it by reaching over your right shoulder with either hand.
   - **Shield:** press the left grip to defend yourself.
   - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
@@ -45,14 +44,12 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 ## Before you install
 
-Start the game normally once and, in its graphics settings:
+Start the game normally once, then close it. The installer then sets the game's graphics settings for VR by itself:
 
-- set the **Display mode** to **Windowed**,
-- turn **VSync** off,
-- turn the **frame rate limit** off,
-- set **Motion blur** to **0**,
-- turn **DLSS** on if you have an NVIDIA graphics card (recommended),
-- turn **HDR** off.
+- **Display mode** **Windowed**, **VSync** off, **frame rate limit** off, **Motion blur** **0**, **HDR** off,
+- it asks whether you use **DLSS** (recommended with an NVIDIA graphics card) and which preset (**Ultra Performance**, **Performance**, **Balanced** or **Quality**); without DLSS it turns DLSS off.
+
+If it can't change a setting, it tells you which ones to set yourself in the game's graphics settings. The uninstaller puts your old values back.
 
 ## Install
 
@@ -69,7 +66,8 @@ VR turns on by itself as soon as the game starts, and SteamVR starts with it. Us
 |---|---|
 | **Right trigger next to your head** | First person on / off |
 | **Hold the right trigger next to your head** | First person in cutscenes |
-| **All four face buttons** | Game menu |
+| **Tap all four face buttons** | Options / ☰ |
+| **Hold all four face buttons** | Game menu (map, skills, inventory) |
 | **F9** | VR off / on (play on your monitor, press again to go back to VR) |
 
 ➡️ All controls, motion gestures, settings and fixes: **[GUIDE.md](GUIDE.md)**
@@ -95,10 +93,8 @@ None of these files contain your user name or other personal information.
 ## Known bugs (fixes coming soon)
 
 - **Some of the interface is missing in first person** (the health and Spartan Rage bars).
-- **Atreus' aiming icon is broken.**
 - **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
-- **Phasing through walls during combat** (see *Important: read before playing*).
-- **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks, and the fists' hit area is too big: you can punch enemies from about 2 metres away.
+- **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
 - **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Use SteamVR for now.
 - **Button prompts can go missing in first person** (see *Important: read before playing* for the workaround).
 

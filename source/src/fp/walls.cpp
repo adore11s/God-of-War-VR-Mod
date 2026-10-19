@@ -273,4 +273,107 @@ void WallsIdle() {
     SetShift(nullptr);
 }
 
+// D-230 (owner: "any attack in first person - axe, fists, Blades - if I walk backwards during it I phase through walls
+// and objects and fall out of the map; even on stairs"; "ONLY walking backwards, not forward"): the held spot of an F1
+// attack is moved by the stick with no collision (combat.cpp steer, D-077), and the game's controller is put onto it -
+// at the attack's end when the game body is "ahead" of it (taken for the attack's lunge: walking backwards puts the
+// wall-stopped game body ahead) and every frame of the walking-on handoff. A step of the held spot is now cast against
+// the world first: Kratos' capsule at three heights (feet + 0.35 / 0.9 / 1.5 m, wall_body_radius 0.3 m kept), sliding
+// along a wall it meets, and a ground probe at the end (no ground within 1.2 m below, or ground over 0.4 m above the feet
+// = not walkable: no step). Game thread; with walls off (walls_f1 0) or no cast possible, the step is allowed as before.
+bool WallsStep(const float from[3], const float to[3], float out[3]) {
+    out[0] = to[0]; out[1] = to[1]; out[2] = to[2];
+    if (!Enabled() || config::GetFloat("attack_walk_walls", 1.f) < 0.5f) return true;
+    {   // no cast possible here (another thread, no world): the step as before - never blocked by a missing cast
+        uint8_t* world = *(uint8_t**)G(kWorldsVa);
+        if (!GameThreadReady() || !world || !*(void**)world) return true;
+    }
+    static const float radius = config::GetFloat("wall_body_radius", 0.3f);
+    static uint64_t steps = 0, stopped = 0, slid = 0, noGround = 0;
+    auto horizontalCast = [&](const float a[3], const float b[3], float* allowed, float n[3]) {
+        float d[3] = {b[0] - a[0], 0.f, b[2] - a[2]};
+        const float L = sqrtf(d[0] * d[0] + d[2] * d[2]);
+        *allowed = L;
+        if (L < 1e-4f) return false;
+        const float u[3] = {d[0] / L, 0.f, d[2] / L};
+        bool any = false;
+        for (float hgt : {0.35f, 0.9f, 1.5f}) {
+            const float s[3] = {a[0], a[1] + hgt, a[2]};
+            const float e[3] = {a[0] + u[0] * (L + radius), a[1] + hgt, a[2] + u[2] * (L + radius)};
+            Hit h;
+            if (!Cast(s, e, &h)) continue;
+            const float along = (h.p[0] - s[0]) * u[0] + (h.p[2] - s[2]) * u[2];
+            if (!std::isfinite(along) || along < 0.02f) continue;  // (the start itself inside geometry: not this step's)
+            const float ok = fmaxf(0.f, along - radius);
+            if (ok < *allowed) {
+                *allowed = ok;
+                const float nl = sqrtf(h.n[0] * h.n[0] + h.n[2] * h.n[2]);
+                n[0] = nl > 1e-3f ? h.n[0] / nl : -u[0];
+                n[1] = 0.f;
+                n[2] = nl > 1e-3f ? h.n[2] / nl : -u[2];
+                any = true;
+            }
+        }
+        return any;
+    };
+    auto walkable = [&](const float p[3]) {
+        const float s[3] = {p[0], from[1] + 0.6f, p[2]}, e[3] = {p[0], from[1] - 1.2f, p[2]};
+        Hit h;
+        if (!Cast(s, e, &h)) return false;      // no ground below: a ledge / hole
+        return h.p[1] - from[1] < 0.4f;          // a step up of at most 0.4 m
+    };
+    ++steps;
+    float allowed = 0.f, n[3] = {0.f, 0.f, 0.f};
+    const bool hitWall = horizontalCast(from, to, &allowed, n);
+    float p[3] = {to[0], from[1], to[2]};
+    if (hitWall) {
+        const float dx = to[0] - from[0], dz = to[2] - from[2], L = sqrtf(dx * dx + dz * dz);
+        p[0] = from[0] + dx / L * allowed;
+        p[2] = from[2] + dz / L * allowed;
+        // slide: the rest of the step along the wall (its component into the wall removed)
+        float rx = to[0] - p[0], rz = to[2] - p[2];
+        const float into = rx * n[0] + rz * n[2];
+        if (into < 0.f) { rx -= into * n[0]; rz -= into * n[2]; }
+        const float q[3] = {p[0] + rx, from[1], p[2] + rz};
+        float a2 = 0.f, n2[3];
+        if (rx * rx + rz * rz > 1e-8f && !horizontalCast(p, q, &a2, n2)) { p[0] = q[0]; p[2] = q[2]; ++slid; }
+        else ++stopped;
+    }
+    // the ground probe counts only where it finds the ground under Kratos' feet now (a surface the cast does not see -
+    // a boat, a platform - must not stop him)
+    static bool groundSeen = false;
+    static ULONGLONG groundAt = 0;
+    const ULONGLONG nowT = GetTickCount64();
+    if (nowT - groundAt > 250) { groundSeen = walkable(from); groundAt = nowT; }
+    if (groundSeen && !walkable(p)) {  // the end is no ground to stand on: no step at all
+        ++noGround;
+        out[0] = from[0]; out[1] = from[1]; out[2] = from[2];
+    } else {
+        out[0] = p[0]; out[1] = to[1]; out[2] = p[2];
+    }
+    if ((hitWall || out[0] == from[0]) && (stopped + slid + noGround) % 200 == 1)
+        Log("walls: attack walking - %llu steps, %llu stopped at a wall, %llu slid along one, %llu with no ground ahead "
+            "(D-230)", (unsigned long long)steps, (unsigned long long)stopped, (unsigned long long)slid,
+            (unsigned long long)noGround);
+    return !hitWall && out[0] == p[0] && out[2] == p[2] && p[0] == to[0] && p[2] == to[2];
+}
+
+bool WallsAttackActive() { return Enabled() && config::GetFloat("attack_walk_walls", 1.f) > 0.5f; }
+
+// D-230: a straight move of Kratos (feet height from[1]) clear of walls - the end of a held attack snaps the game onto
+// the held spot only through a clear path
+bool WallsClearPath(const float from[3], const float to[3]) {
+    if (!Enabled() || config::GetFloat("attack_walk_walls", 1.f) < 0.5f) return true;
+    {
+        uint8_t* world = *(uint8_t**)G(kWorldsVa);
+        if (!GameThreadReady() || !world || !*(void**)world) return true;
+    }
+    for (float hgt : {0.35f, 0.9f, 1.5f}) {
+        const float s[3] = {from[0], from[1] + hgt, from[2]}, e[3] = {to[0], from[1] + hgt, to[2]};
+        Hit h;
+        if (Cast(s, e, &h)) return false;
+    }
+    return true;
+}
+
 }  // namespace gowvr::fp

@@ -6,6 +6,7 @@
 #include "headcam.h"
 #include "mutate.h"
 #include "../core/log.h"
+#include "../core/config.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -212,6 +213,39 @@ void HeadcamHandSimMove(float amp) { g_handSimMove = amp; Log("headcam: simulate
 
 void HeadcamHandSim(bool on) { g_handSim = on; Log("headcam: simulated hands %s", on ? "on" : "off"); }
 
+// D-239 (owner: "someone said I should add hand smoothing - the hands jitter a little"): the controller pose (tracking
+// space, before it is put on Kratos) through a One Euro filter per hand - small jitter at rest is smoothed, fast motion
+// passes nearly unfiltered (the cutoff rises with speed), so swings keep their timing. Only the drawn hands: the swing
+// and gesture detection read the raw controllers. VR settings panel "Hand smoothing"; gowvr.ini hand_smoothing
+// (1 = on), hand_smooth_cutoff (Hz at rest, 3) / hand_smooth_beta (cutoff added per m/s, 6)
+static void SmoothHand(int h, Mat4& e) {
+    static bool have[2] = {false, false};
+    static Mat4 f[2];
+    static LARGE_INTEGER last[2] = {};
+    static LARGE_INTEGER qf{};
+    if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+    if (config::GetFloat("hand_smoothing", 1.f) < 0.5f) { have[h] = false; return; }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    const float dt = last[h].QuadPart ? (float)(now.QuadPart - last[h].QuadPart) / (float)qf.QuadPart : 0.f;
+    last[h] = now;
+    if (!have[h] || dt <= 0.f || dt > 0.1f) { f[h] = e; have[h] = true; return; }
+    static const float minCut = config::GetFloat("hand_smooth_cutoff", 3.f), beta = config::GetFloat("hand_smooth_beta", 6.f);
+    const float dx = e.m[3][0] - f[h].m[3][0], dy = e.m[3][1] - f[h].m[3][1], dz = e.m[3][2] - f[h].m[3][2];
+    // speed: position and the rotation's change (rows' difference ~ angle) at a 0.15 m lever
+    float rot = 0.f;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) rot += (e.m[r][c] - f[h].m[r][c]) * (e.m[r][c] - f[h].m[r][c]);
+    const float speed = (sqrtf(dx * dx + dy * dy + dz * dz) + 0.15f * sqrtf(rot * 0.5f)) / dt;
+    const float cutoff = minCut + beta * speed;
+    const float tau = 1.f / (6.2831853f * cutoff);
+    const float a = 1.f / (1.f + tau / dt);
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 3; ++c) f[h].m[r][c] += (e.m[r][c] - f[h].m[r][c]) * a;
+    OrthonormalizeKeepScale(f[h]);
+    e = f[h];
+}
+
 void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2]) {
     if (g_handSim) {
         for (int h = 0; h < 2; ++h) {
@@ -244,6 +278,7 @@ void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2]) {
         if (!valid[h]) continue;
         // D-110: the grip predicted for the eyes' display time when located, else this frame's (one frame older)
         Mat4 e = Mul(FromPose(g_prepGripValid[h] ? g_prepGrip[h] : s.hand[h].grip), g_originInv);
+        SmoothHand(h, e);  // D-239
         if (g_lockPos.load())
             for (int j = 0; j < 3; ++j) e.m[3][j] -= g_headT[j];  // hands relative to the (pinned) head
         for (int j = 0; j < 3; ++j) e.m[3][j] *= g_scale;

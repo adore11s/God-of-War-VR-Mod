@@ -16,7 +16,7 @@
 namespace gowvr::vr {
 namespace {
 
-constexpr int kW = 1000, kH = 1290;         // panel pixels
+constexpr int kW = 1000, kH = 1430;         // panel pixels (D-241: + the rendering method row)
 constexpr float kPanelW = 1.3f;             // metres
 constexpr float kGap = 0.15f;               // between the screen and the panel
 constexpr int kCursorPx = 64;
@@ -27,7 +27,7 @@ const int kSizes[] = {1440, 1728, 2048, 2304, 2560, 2816};
 
 enum Action {
     kNone, kTurnSmooth, kTurnSnap, kStepDown, kStepUp, kPadXbox, kPadPs, kWallsOn, kWallsOff, kSizeDown, kSizeUp,
-    kFinisherFp, kFinisherTp, kVrOn, kVrOff
+    kFinisherFp, kFinisherTp, kVrOn, kVrOff, kAfrOn, kAfrOff
 };
 struct Button { RECT r; Action a; const wchar_t* text; bool selected; };
 
@@ -40,7 +40,7 @@ uint32_t g_out[kW * kH];
 uint32_t g_cursor[kCursorPx * kCursorPx];
 bool g_cursorMade = false;
 
-Button g_buttons[16];
+Button g_buttons[24];
 int g_nButtons = 0;
 Action g_hover = kNone;
 bool g_needDraw = true;
@@ -63,6 +63,7 @@ bool Walls() { return config::GetFloat("walls_f1", 1.f) > 0.5f; }
 // owner 2026-10-18: finishers / executions in first person (as before) or third person (the game's own camera;
 // fp/firstperson.cpp FinisherScene)
 bool FinisherTp() { return config::GetFloat("finisher_third_person", 0.f) > 0.5f; }
+bool Afr() { return config::GetFloat("afr_rendering", 0.f) > 0.5f; }         // D-241
 
 void Apply(Action a) {
     switch (a) {
@@ -88,6 +89,8 @@ void Apply(Action a) {
         case kWallsOff: config::SetFloat("walls_f1", 0.f); break;
         case kFinisherFp: config::SetFloat("finisher_third_person", 0.f); break;
         case kFinisherTp: config::SetFloat("finisher_third_person", 1.f); break;
+        case kAfrOn: config::SetFloat("afr_rendering", 1.f); break;
+        case kAfrOff: config::SetFloat("afr_rendering", 0.f); break;
         case kVrOn: break;  // (VR is on while the panel shows)
         case kVrOff: diag::RequestVr(false); break;  // as F9 - F9 turns it back on
         case kSizeDown:
@@ -111,11 +114,12 @@ void Apply(Action a) {
         default: return;
     }
     g_needDraw = true;
-    Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f%s, finishers %s", (int)a,
+    Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f%s, finishers %s, "
+        "rendering %s", (int)a,
         Snap() ? "snap" : "smooth", config::GetFloat("turn_speed", 1.f) * 100.f,
         config::GetFloat("snap_turn_degrees", 45.f), input::PadMode() ? "PlayStation" : "Xbox", Walls() ? "on" : "off",
         config::GetFloat("render_size", 2048.f), frame::AutoRenderSize() ? " (auto)" : "",
-        FinisherTp() ? "third person" : "first person");
+        FinisherTp() ? "third person" : "first person", Afr() ? "AFR" : "native");
 }
 
 bool MakeSurface() {
@@ -196,6 +200,10 @@ void Layout(wchar_t* stepText, wchar_t* sizeText) {
     AddButton(40, y, 440, 72, kFinisherFp, L"First person", !tp);
     AddButton(520, y, 440, 72, kFinisherTp, L"Third person", tp);
     y += 140;
+    const bool afr = Afr();  // D-241 (owner: "Rendering Method": Native / AFR)
+    AddButton(40, y, 440, 72, kAfrOff, L"Native", !afr);
+    AddButton(520, y, 440, 72, kAfrOn, L"AFR", afr);
+    y += 140;
     AddButton(40, y, 440, 72, kVrOn, L"On", true);  // the panel only shows in VR
     AddButton(520, y, 440, 72, kVrOff, L"Off", false);
     if (const int autoPx = frame::AutoRenderSize()) {
@@ -218,8 +226,9 @@ void Draw() {
     Text(L"VR SETTINGS", {40, 0, kW - 40, 100}, g_fTitle, white, DT_LEFT | DT_VCENTER);
     const wchar_t* labels[] = {L"Turning (first person)", Snap() ? L"Snap angle" : L"Turning speed",
                                L"Controller buttons", L"Wall collision (first person)", L"VR picture size (per eye)",
-                               L"Finishers Perspective", L"VR on / off  (Crashing during cutscene)"};
-    for (int i = 0; i < 7; ++i) Text(labels[i], {40, 130 + i * 140, kW - 40, 130 + i * 140 + 48}, g_fLabel, label, DT_LEFT | DT_VCENTER);
+                               L"Finishers Perspective", L"Rendering Method",
+                               L"VR on / off  (Crashing during cutscene)"};
+    for (int i = 0; i < 8; ++i) Text(labels[i], {40, 130 + i * 140, kW - 40, 130 + i * 140 + 48}, g_fLabel, label, DT_LEFT | DT_VCENTER);
     // the value boxes of the two stepper rows
     for (int row : {1, 4}) {
         const int y = 130 + row * 140 + 52;
@@ -328,9 +337,9 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
     }
     // redraw when a value or the hovered button changed (values: also changed with F10 / F11 or a gowvr.ini edit)
     char state[96];
-    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
+    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
               config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(), Walls() ? 1 : 0,
-              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0);
+              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0, Afr() ? 1 : 0);
     if (hover != g_hover || strcmp(state, g_lastState) != 0 || g_needDraw) {
         g_hover = hover;
         strcpy_s(g_lastState, state);

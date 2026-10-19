@@ -78,6 +78,10 @@ void FpEye(float out[3]) { out[0] = g_lastEye[0]; out[1] = g_lastEye[1]; out[2] 
 // wrongly counted as ordinary combat here). gowvr.ini scripted_as_cutscene 0 = off.
 static bool ScriptedName(const char* a) {
     if (!a || !a[0]) return false;
+    // D-233: Kratos being hit (Baldur's quick hits csBaldurRibShot* ...) stays gameplay F1 - frozen there (combat.cpp)
+    if (IsHitReactionMove(a)) return false;
+    // D-233 (owner: "make dying an F3 mode, not F1"): Kratos' death (DeathF01, deathV ...) is a cutscene
+    if (_strnicmp(a, "death", 5) == 0) return true;
     // D-192: + csMMA* - the mounted brawl on Baldur (csMMAKratosIdleL, csMMABaldurChokeEnterL / HitL, R1 / R2 prompts)
     if (_strnicmp(a, "csbaldur", 8) == 0 || _strnicmp(a, "csmma", 5) == 0 || _strnicmp(a, "nar", 3) == 0) return true;
     // D-206: Kratos boosting Atreus onto a ledge (navBuddyBoostSon*) - a scripted pair move
@@ -717,7 +721,7 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
     // Owner: the view a little in front of the eyes (~0.25 m or a bit less) so it never overlaps Kratos' body. Along
     // the base's own forward (it looks down -Z), in F1 and F3; gowvr.ini fp_forward, command "fpfwd <m>".
     // D-104 (owner: "move the F1 / F3 camera a bit backward, like 0.25 m"): -0.05 (was 0.20)
-    if (g_fwd < -99.f) g_fwd = config::GetFloat("fp_forward", 0.2f);
+    if (g_fwd < -99.f) g_fwd = config::GetFloat("fp_forward", 0.f);
     for (int j = 0; j < 3; ++j) base->m[3][j] -= base->m[2][j] * g_fwd;
     // D-067 (owner: "move the default F1 head position a bit to the right"): along the base's right axis, F1 gameplay;
     // gowvr.ini fp_right, command "fpright <m>". Owner 2026-10-17: "try to make it 0 cm to the right" - 0 (was 0.04)
@@ -751,7 +755,7 @@ void SetEyeOffset(float forward, float up) {
 
 int FpMode() { return g_lastMode; }
 
-float ViewForward() { return g_fwd < -99.f ? config::GetFloat("fp_forward", 0.2f) : g_fwd; }
+float ViewForward() { return g_fwd < -99.f ? config::GetFloat("fp_forward", 0.f) : g_fwd; }
 
 void SetViewForward(float metres) {
     g_fwd = metres;

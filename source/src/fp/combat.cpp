@@ -3,6 +3,7 @@
 #include "body.h"
 #include "firstperson.h"
 #include "movelog.h"
+#include "walls.h"
 #include "../input/vpad.h"
 #include "../core/log.h"
 #include "../core/config.h"
@@ -174,7 +175,8 @@ std::atomic<ULONGLONG> g_heroVolAt{0};
 std::atomic<float> g_hitRadius{-1.f};
 // D-108 (owner: "make the radius lower when doing the fist combat - the hit detection radius"): bare-handed attacks
 // (weapon slot Bare, or the axe slot with the axe not in the hand: sheathed / thrown - also Spartan Rage) use
-// hit_radius_fist (default 0.5 m, half the weapon's 1.0 m); command "hitradiusfist <m>"
+// hit_radius_fist (default 0.5 m, half the weapon's 1.0 m); command "hitradiusfist <m>". D-231 (owner: "the fist hit
+// reach is like 2 m when it should be 0.5 m at best" - 0.5 m spheres round the fists, plus the enemy's own volume): 0.1 m
 std::atomic<float> g_hitRadiusFist{-1.f};
 bool FistAttack() {
     const int w = CurrentWeapon();
@@ -351,7 +353,7 @@ static void TargetDiag(int64_t volB, int64_t B, bool hit, bool retested) {
 uint32_t __fastcall hk_VolTest(int64_t volA, int64_t volB, int64_t A, int64_t B, int64_t ctx, int64_t p6, int64_t p7,
                                int64_t p8, int64_t p9) {
     if (g_hitRadius.load() < -0.5f) g_hitRadius = config::GetFloat("hit_radius", 1.0f);
-    if (g_hitRadiusFist.load() < -0.5f) g_hitRadiusFist = config::GetFloat("hit_radius_fist", 0.5f);
+    if (g_hitRadiusFist.load() < -0.5f) g_hitRadiusFist = config::GetFloat("hit_radius_fist", 0.1f);
     const float R0 = g_hitRadius.load();
     {   // diagnostic: the first calls' attacker / victim entries vs Kratos' object and creature
         static std::atomic<int> diag{0};
@@ -692,7 +694,24 @@ bool ContainsI(const char* s, const char* p) {
 // Owner-editable override: gowvr.ini move_policy_<animation base name>=0 none / 1 hold / 2 animate.
 bool IsBladesFreeAnim(const char* a);
 bool IsScriptedWeaponAnim(const char* a);  // D-193 (below)
+// D-233 (owner, D-232 build: "the animations aren't frozen when getting hit - look at the log near when I died, I was getting
+// hit multiple times"; owner log: the plain hits (hitGroundSlideRight, hitHeavyToKneel) were HELD, but most hits of that
+// fight were Baldur's attacks on Kratos - csBaldurRibShotR x18, csBaldurRunKickR, csBaldurDashElbowL, csBaldurHeavyUCR -
+// sync moves the D-184 csBaldur* rule made cutscenes (F3: the view on his animated head)): those quick hits are hit
+// reactions too. Baldur's long sequences (ElementalBurst, ShieldSmash, RoofSlam, Birdseye, Sky, TreeBat, Buried ...) stay
+// cutscenes. gowvr.ini hit_reaction_freeze 0 = off (both)
+bool HitMoveName(const char* a) {
+    if (!a || !a[0]) return false;
+    static const bool on = config::GetFloat("hit_reaction_freeze", 1.f) > 0.5f;
+    if (!on) return false;
+    if (_strnicmp(a, "hit", 3) == 0) return _strnicmp(a, "hittrap", 7) != 0;
+    static const char* kBaldurHits[] = {"csbaldurribshot", "csbaldurrunkick", "csbaldurdashelbow", "csbaldurheavyuc"};
+    for (const char* k : kBaldurHits)
+        if (_strnicmp(a, k, strlen(k)) == 0) return true;
+    return false;
+}
 Policy Classify(const char* anim, bool sync) {
+    if (HitMoveName(anim)) return Policy::Hold;  // D-232 / D-233 (sync moves too: Baldur's hits)
     if (sync) return Policy::Animate;
     if (!anim || !anim[0]) return Policy::None;
     std::string base(anim);
@@ -702,6 +721,13 @@ Policy Classify(const char* anim, bool sync) {
     // D-062 (owner attack review): the bare-hand R2 kick and the Rage rock throw play in full as well
     if (IsBladesFreeAnim(anim)) return Policy::None;
     if (IsScriptedWeaponAnim(anim)) return Policy::None;  // D-193: the game places Kratos (no hold, aim or speed-up)  // D-073: body from the game, arms on the controllers
+    // D-232 (owner: "can you freeze animations like when getting hit in F1 mode?"; owner logs: hitStumbleRight,
+    // hitHeavyToKneel, hitGroundSlideRight, hit_earthquake_Medium, hitReactBrace* ran with no policy - the drawn body
+    // played the stagger / kneel and the F1 view followed its lean, 1.2 m high at 2.8 m/s in a knockback): Kratos' own hit
+    // reactions (hit*, not sync moves - those return above - nor the scripted traps hitTrap*) are HELD like an attack:
+    // the drawn body keeps its calm pose (FreezeLocal), the arms stay on the controllers, the view stays at the eye
+    // point. The game still moves him (a knockback slides as before). gowvr.ini hit_reaction_freeze 0 = off
+    // (D-233: IsHitReactionMove, at the top - before the sync-move rule)
     static const char* kAnimate[] = {"attRageEnter", "attRageGrabEnter", "attRageProjectileEnter", "attRageProjectileToss",
                                      "spartankick"};
     for (const char* a : kAnimate)
@@ -777,6 +803,8 @@ float* ControllerPos() {
 }
 
 }  // namespace
+
+bool IsHitReactionMove(const char* a) { return HitMoveName(a); }  // D-233
 
 // diagnostic "ctldump": the character controller's floats around the position (+0x3c0..+0x4c0) and the game root yaw -
 // where is the facing kept?
@@ -1135,6 +1163,8 @@ static InteractCtx ClassifyContext(const char* prim, const char* anim, bool sync
         c.why = why;
     };
     const bool attackName = starts("att") || starts("def");
+    // D-233: Kratos being hit is no scene - no context (the view stays at the eye point, arms on the controllers)
+    if (HitMoveName(prim) || HitMoveName(anim)) return c;
     // D-100 (owner: "I hit an enemy, the axe stayed in place on the enemy where I hit it, and I couldn't hit again for
     // a few seconds"; owner log: a connecting light axe swing turns into the combat-sync follow-up move
     // csaxelightcombo01blendlight / anim csglobalmeleestickf01 - the axe sticking in the enemy - which the cs* scene
@@ -1437,8 +1467,23 @@ void CombatTick() {
                 const float into = vel[0] * blockDir[0] + vel[1] * blockDir[1];
                 if (into > 0.f) { vel[0] -= into * blockDir[0]; vel[1] -= into * blockDir[1]; }
             }
-            hp[0] += vel[0] * dt;
-            hp[1] += vel[1] * dt;
+            // D-230: the step is cast against the world first (walls, objects, ledges - WallsStep); a blocked part of it is
+            // taken out of the velocity too, so the held spot does not keep pressing into the wall
+            float gpw[3], gyw;
+            if (dt > 1e-4f && GameRoot(gpw, &gyw)) {
+                const float from[3] = {hp[0], gpw[1], hp[1]};
+                const float to[3] = {hp[0] + vel[0] * dt, gpw[1], hp[1] + vel[1] * dt};
+                float got[3];
+                if (!WallsStep(from, to, got)) {
+                    vel[0] = (got[0] - from[0]) / dt;
+                    vel[1] = (got[2] - from[2]) / dt;
+                }
+                hp[0] = got[0];
+                hp[1] = got[2];
+            } else {
+                hp[0] += vel[0] * dt;
+                hp[1] += vel[1] * dt;
+            }
             moved += sqrtf(vel[0] * vel[0] + vel[1] * vel[1]) * dt;
             movedY += sqrtf(vel[0] * vel[0] + vel[1] * vel[1]) * dt;
         };
@@ -1453,7 +1498,9 @@ void CombatTick() {
             if (cp && g_attackHold.load() && !animated && !syncMove) {
                 const float dx = cp[0] - hp[0], dz = cp[2] - hp[1];
                 const float ahead = -(dx * sinf(heldYaw) + dz * cosf(heldYaw));
-                if (ahead > 0.02f) { cp[0] = hp[0]; cp[2] = hp[1]; }
+                // D-230: only through a clear path (walking backwards, the game body stopped at a wall is "ahead" too)
+                const float from[3] = {cp[0], cp[1], cp[2]}, to[3] = {hp[0], cp[1], hp[1]};
+                if (ahead > 0.02f && WallsClearPath(from, to)) { cp[0] = hp[0]; cp[2] = hp[1]; }
             }
             // the view eases from the held spot onto the game's position (where the game has Kratos this frame; a real
             // jump - over 0.6 m - still snaps); only when the view was on the held spot
@@ -1552,7 +1599,11 @@ void CombatTick() {
                     const float rx = cp[0] - prevRead[0], rz = cp[2] - prevRead[1];
                     const float behind = sl > 1e-4f ? ((cp[0] - hp[0]) * prevStep[0] + (cp[2] - hp[1]) * prevStep[1]) / sl : 0.f;
                     staticN = sl > 0.02f && sqrtf(rx * rx + rz * rz) < 0.25f * sl && behind < -0.03f ? staticN + 1 : 0;
-                    if (staticN >= 2 && !blocked) {
+                    // D-231 (owner: "I can't move during fist attacks, unlike axe attacks"): during the attack the game's
+                    // position is not written (only the reach clamp), so a punch - no lunge - leaves it standing behind the
+                    // held spot: after two frames this read it as "the game holds Kratos back" and stopped the walk. With
+                    // the walls cast (D-230) every step is checked against the world itself - the guess is not needed
+                    if (staticN >= 2 && !blocked && !WallsAttackActive()) {
                         blocked = true;
                         blockDir[0] = prevStep[0] / sl;
                         blockDir[1] = prevStep[1] / sl;
@@ -1575,7 +1626,12 @@ void CombatTick() {
                 // D-081 (owner: "please do the 2.5 m reach like I told you"): default 2.5 again (D-076 had set 0 because
                 // of the enemies floating in front; the snap back at the attack's end stays)
                 if (g_reach.load() < -0.5f) g_reach = config::GetFloat("attack_reach", 2.5f);
-                const float reach = g_reach.load();
+                // D-234 (owner, D-231 build: "fist combat now works while walking but the reach is still more than 2 m"):
+                // the punches' reach was this lunge allowance, not the sphere size - the game's body (its fists and their
+                // attack volume) followed the punch's lunge / target snap up to attack_reach (2.5 m) from the held spot.
+                // Punches get attack_reach_fist (0.3 m) - their hits come from about the drawn fists' own reach
+                static const float fistReach = config::GetFloat("attack_reach_fist", 0.3f);
+                const float reach = FistAttack() ? fminf(fistReach, g_reach.load()) : g_reach.load();
                 const float lx = cp[0] - hp[0], lz = cp[2] - hp[1], ll = sqrtf(lx * lx + lz * lz);
                 if (reach <= 0.f) {
                     cp[0] = hp[0];
@@ -1629,9 +1685,15 @@ void CombatTick() {
                     lastWritten[0] = hp[0];
                     lastWritten[1] = hp[1];
                 }
+                // D-230: the game is put on the held spot only through a clear path; else it keeps its own position
+                bool behindWall = false;
                 if (firstHandoff) {
-                    cp[0] = hp[0];
-                    cp[2] = hp[1];
+                    const float from[3] = {cp[0], cp[1], cp[2]}, to[3] = {hp[0], cp[1], hp[1]};
+                    behindWall = !WallsClearPath(from, to);
+                    if (!behindWall) {
+                        cp[0] = hp[0];
+                        cp[2] = hp[1];
+                    }
                 }
                 const float ox = firstHandoff ? 0.f : cp[0] - lastWritten[0], oz = firstHandoff ? 0.f : cp[2] - lastWritten[1];
                 const float own = dt > 1e-4f ? sqrtf(ox * ox + oz * oz) / dt : 0.f;
@@ -1641,7 +1703,9 @@ void CombatTick() {
                 // game's own (resolved) position, instead of pushing on
                 const float back = ours0 > 0.3f && dt > 1e-4f ? -(ox * vel[0] + oz * vel[1]) / (ours0 * dt) : 0.f;
                 const bool blocked = back > 0.5f || ContainsI(prim, "stop") || ContainsI(prim, "fall") || ContainsI(prim, "land");
-                if (blocked) {
+                if (behindWall) {
+                    release("held spot behind a wall - the game's own position kept");
+                } else if (blocked) {
                     if (holds <= 80)
                         Log("combat: handoff - the game holds Kratos back (%.2f m/s against our %.2f, %s)", back, ours0, prim);
                     release("game blocked");

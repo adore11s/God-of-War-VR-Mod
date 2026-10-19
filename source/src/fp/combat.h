@@ -66,5 +66,7 @@ bool CombatHeldRoot(float* x, float* z, float* y);  // y = NAN: keep the game's 
 bool CombatReleaseOffset(float* dx, float* dz);
 bool CombatViewHeight(float gameY, float* y);  // D-084: the eye height while walking during a held attack
 void CombatNudgeAmount(float a);        // command "nudge <0..1>"
+// D-233: a move in which Kratos is HIT (his own hit reactions hit*, Baldur's quick hits on him) - frozen in F1, not a scene
+bool IsHitReactionMove(const char* a);
 
 }  // namespace gowvr::fp

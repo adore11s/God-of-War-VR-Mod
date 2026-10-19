@@ -419,7 +419,7 @@ void BankCapture() {
 void BankRestore() {
     static const bool jitterPerFrame = config::GetFloat("jitter_per_frame", 1.f) > 0.5f;
     for (int i = 0; i < g_nbank; ++i) {
-        if (g_bank[i].va == kJitterCounterVa && !jitterPerFrame) continue;
+        if (g_bank[i].va == kJitterCounterVa && (!jitterPerFrame || !DlssFixesActive())) continue;  // D-242: DLSS on only
         // D-117 (owner crash 2026-10-05 19:24, d3d11.dll+0x193fe4 on the first stereo frame after an area load): the fog
         // history pointers 0x1412390a8 / b0 point INTO the PassVolumetricFog object (this + 0x348 / 0x3a8 and + 0x1c8 /
         // 0x228, render_passes_019 vfunc_1 - the ping-pong moves each by 0x60 only). A load resets them to a default
@@ -523,6 +523,51 @@ void __fastcall hk_Kick() {
         return;
     }
     if (g_double.load() > 0) {
+        // D-241 (owner: "add a VR settings option AFR rendering - implement it and make it switch in real time"): AFR =
+        // one kick per frame, the eyes alternating (about half the GPU work); the other eye shows its last image at the
+        // pose it was rendered with (the runtime reprojects it). Each eye keeps its own histories (eye_history_fix, DLSS /
+        // TAA per eye: every other frame). Switched live from gowvr.ini afr_rendering (VR settings panel)
+        {
+            static bool afrWas = false;
+            const bool afr = g_vr.load() && EyesEnabled() && config::GetFloat("afr_rendering", 0.f) > 0.5f;
+            if (afr != afrWas) {
+                afrWas = afr;
+                EyesAfr(afr);
+                ResetEyeHistory();
+                TaaEyesReset();
+                Log("r1: AFR rendering %s", afr ? "ON (one eye per frame, alternating)" : "off (both eyes every frame)");
+            }
+            if (afr) {
+                static int afrEye = 1;
+                afrEye ^= 1;
+                ++g_skinFrame;
+                g_skinEye = -1;  // (one kick: its skinning keeps the game's own previous pose)
+                bool headOn = false;
+                if (g_vr.load()) {
+                    vr::EyeViews used;
+                    headOn = HeadcamArm(&used);
+                    EyesSetFrameViews(headOn ? used : vr::EyeViews{});
+                    if (headOn) { EyeFrameBegin(); SetEyeIndex(afrEye); }
+                }
+                if (g_eyesOn && !headOn) { SetEyeIndex(afrEye); SetEyeCamera(true, g_eyeOff[afrEye], g_eyeYawDeg[afrEye]); }
+                EyesAfrKick(afrEye);
+                fp::BodyHideDrawBegin();
+                fp::WaitHeroFrame();
+                fp::BodyHideEnsure();
+                fp::EyeProbe(afrEye ? 2 : 0);
+                g_kickPhase = afrEye ? 3 : 1;
+                o_Kick();
+                g_kickPhase = 0;
+                fp::EyeProbe(afrEye ? 3 : 1);
+                fp::BodyHideDrawEnd();
+                if (headOn) SetEyePoses(false, nullptr, nullptr, false);
+                else if (g_eyesOn) SetEyeCamera(false, 0.f, 0.f);
+                const uint64_t k = ++g_doubled;
+                if (k <= 5 || k % 1000 == 0) Log("r1: AFR kick #%llu (eye %d)", (unsigned long long)k, afrEye);
+                if (--g_double == 0) Log("r1: double-kick window over (%llu frames)", (unsigned long long)g_doubled.load());
+                return;
+            }
+        }
         bool snap = g_snap.load() > 0;
         if (snap) Snap("before-k1");
         if (g_diffMode.load() == 1) DataSnap(g_preKick);
@@ -669,7 +714,7 @@ void R1SkinPrevious(uint8_t* inst, void* renderObject, void* curOut, void* prevO
                 (unsigned long long)byPhase[4].load(), (unsigned long long)g_skinGiven.load());
     }
     const int eye = g_skinEye.load();
-    if (!on || !inst || !renderObject || !prevOut || eye < 0 || g_double.load() <= 0) return;
+    if (!on || !inst || !renderObject || !prevOut || eye < 0 || g_double.load() <= 0 || !DlssFixesActive()) return;  // D-242
     (void)curOut;
     const uint8_t* skel = *(uint8_t* const*)(inst + 0x10);
     if (!skel) return;

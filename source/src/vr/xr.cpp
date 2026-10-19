@@ -229,7 +229,8 @@ std::string ResultStr(XrResult r) {
     } while (0)
 
 // ---- motion controller actions ----
-enum Act { A_GRIP, A_AIM, A_STICK, A_TRIGGER, A_SQUEEZE, A_TRACKPAD, A_A, A_B, A_STICKCLICK, A_TRIGGERTOUCH, A_HAPTIC, A_COUNT };
+enum Act { A_GRIP, A_AIM, A_STICK, A_TRIGGER, A_SQUEEZE, A_TRACKPAD, A_A, A_B, A_STICKCLICK, A_TRIGGERTOUCH, A_HAPTIC, A_MENU,
+           A_COUNT };
 XrActionSet g_actionSet = nullptr;
 XrAction g_act[A_COUNT] = {};
 XrPath g_handPath[2] = {0, 0};
@@ -260,6 +261,7 @@ bool CreateActions() {
         {A_STICKCLICK, "thumbstick_click", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {A_TRIGGERTOUCH, "trigger_touch", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {A_HAPTIC, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT},
+        {A_MENU, "button_menu", XR_ACTION_TYPE_BOOLEAN_INPUT},  // D-236: the Quest's left menu button
     };
     for (const auto& k : kActs) {
         XrActionCreateInfo ci{XR_TYPE_ACTION_CREATE_INFO};
@@ -317,6 +319,10 @@ bool CreateActions() {
         add("/user/hand/right", kTouchCommon, 8);
         add("/user/hand/left", kTouchL, 2);
         add("/user/hand/right", kTouchR, 2);
+        // D-236 (owner: "Meta Quest players can't press the three-lines button the Xbox prompts show - the Quest 2 / 3 have
+        // that button"): the left Touch controller's menu button (the right one is the system button) -> Start
+        static const B kTouchMenu[] = {{A_MENU, "/input/menu/click"}};
+        add("/user/hand/left", kTouchMenu, 1);
         XrInteractionProfileSuggestedBinding sb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         sb.interactionProfile = P("/interaction_profiles/oculus/touch_controller");
         sb.countSuggestedBindings = (uint32_t)v.size();
@@ -436,6 +442,7 @@ void SyncInput(XrTime time) {
                 hs.b = b(A_B);
                 hs.stickClick = b(A_STICKCLICK);
                 hs.triggerTouch = b(A_TRIGGERTOUCH);
+                hs.menu = b(A_MENU);
                 if (g_handExt) {
                     if (g_handTrackerSess != g_sess) {  // (re)create for this session
                         g_handTrackerSess = g_sess;
@@ -1434,18 +1441,20 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         Log("summary: fixes (gowvr.ini key = value, 0 = off): xr_loader = %.0f (%s) | crop_to_eye_fov = %d (%s) | "
             "xr_dither = %.0f | eye_history_fix = %.0f | skin_per_frame = %.0f | jitter_per_frame = %.0f | dlss_per_eye = %.0f | "
             "dlss_vr_phases = %.0f | dlss_vr_sharpness = %.2f | mv_health = %.0f | render_size_auto = %.0f | ui_reticle_mode = %.0f | "
-            "finisher_third_person = %.0f | hud_layer = %.0f | sharp_ui = %.0f | hold_bad_poses = %.0f",
+            "finisher_third_person = %.0f | hud_layer = %.0f | sharp_ui = %.0f | hold_bad_poses = %.0f | dlss_fixes_auto = %.0f | "
+            "afr_rendering = %.0f | hand_smoothing = %.0f",
             config::GetFloat("xr_loader", 1.f), loader, crop, cropActive ? "active" : "not on this runtime",
             config::GetFloat("xr_dither", 1.f), config::GetFloat("eye_history_fix", 1.f), config::GetFloat("skin_per_frame", 1.f),
             config::GetFloat("jitter_per_frame", 1.f), config::GetFloat("dlss_per_eye", 1.f),
             config::GetFloat("dlss_vr_phases", 0.f), config::GetFloat("dlss_vr_sharpness", 0.f), config::GetFloat("mv_health", 1.f),
             config::GetFloat("render_size_auto", 1.f), config::GetFloat("ui_reticle_mode", 2.f),
             config::GetFloat("finisher_third_person", 0.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f),
-            config::GetFloat("hold_bad_poses", 1.f));
+            config::GetFloat("hold_bad_poses", 1.f), config::GetFloat("dlss_fixes_auto", 1.f),
+            config::GetFloat("afr_rendering", 0.f), config::GetFloat("hand_smoothing", 1.f));
     }
     Log("summary: pad_mode %.0f, autovr %.0f, dlss_per_eye %.0f, hit_radius %.2f, hit_radius_fist %.2f",
         config::GetFloat("pad_mode", 0.f), config::GetFloat("autovr", 1.f), config::GetFloat("dlss_per_eye", 1.f),
-        config::GetFloat("hit_radius", 1.0f), config::GetFloat("hit_radius_fist", 0.5f));
+        config::GetFloat("hit_radius", 1.0f), config::GetFloat("hit_radius_fist", 0.1f));
     {
         char ui[512], hud[256];
         stereo::UiDiagText(ui, sizeof(ui));

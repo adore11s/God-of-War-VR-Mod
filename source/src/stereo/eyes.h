@@ -21,6 +21,13 @@ bool EyesPair(ID3D11Texture2D** eye0, ID3D11Texture2D** eye1, vr::EyeViews* view
 bool EyesEnabled();
 // D-108 render thread: the eye whose command streams are executing now (0 / 1), -1 = eyes off
 int EyesRenderEye();
+// D-241 AFR rendering (VR settings panel / gowvr.ini afr_rendering): one kick per frame, the eyes alternate. EyesAfr
+// switches the capture to it (live); EyesAfrKick (game thread, before the frame's single kick) names the eye and its
+// views - they travel with the frame's submission, the render thread captures that eye at Present and pairs it with the
+// other eye's last image and the pose it was rendered at.
+void EyesAfr(bool on);
+void EyesAfrKick(int eye);
+bool EyesAfrOn();
 // Save both captured eye images to gowvr_logs/shots/<name>_eye0.png / _eye1.png (1/div scale). Command thread.
 void EyesShot(const char* name, int div);
 

@@ -33,6 +33,7 @@
 #include "../diag/shot.h"
 #include "../vr/xr.h"
 #include "../fp/firstperson.h"
+#include "../fp/body.h"
 #include "eyes.h"
 #include <windows.h>
 #include <d3d11_1.h>
@@ -1121,6 +1122,7 @@ ID3D11Texture2D* g_hudEyeTex[2] = {};
 ID3D11ShaderResourceView* g_hudEyeSrv[2] = {};
 UINT g_hudEyeW = 0, g_hudEyeH = 0;
 std::atomic<bool> g_hudReady[2] = {false, false};
+std::atomic<ULONGLONG> g_hudCopiedAt[2] = {0, 0};  // D-243: when each eye's HUD layer picture was last copied
 float g_hudSx[2] = {0, 0}, g_hudSy[2] = {0, 0};
 uint64_t g_hudLayerFrames = 0;
 
@@ -1150,6 +1152,7 @@ bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
     g_hudSx[eye] = s;
     g_hudSy[eye] = fmaxf(s * UiVerticalFix(d.Height ? (float)d.Width / (float)d.Height : 0.f), 0.02f);
     g_hudReady[eye] = true;
+    g_hudCopiedAt[eye] = GetTickCount64();
     if (++g_hudLayerFrames <= 2 || g_hudLayerFrames % 5000 == 0)
         Log("sharpui: HUD as a layer, eye %d #%llu (scale %.2f x %.2f)", eye, (unsigned long long)g_hudLayerFrames,
             g_hudSx[eye], g_hudSy[eye]);
@@ -1202,11 +1205,20 @@ void SharpUiDiagText(char* out, size_t n) {
               UiVerticalFix(g_uiH ? (float)g_uiW / (float)g_uiH : 0.f));
 }
 
-void SharpUiHudDiscard() { g_hudReady[0] = g_hudReady[1] = false; }
+void SharpUiHudDiscard() {
+    g_hudReady[0] = g_hudReady[1] = false;
+    g_hudCopiedAt[0] = g_hudCopiedAt[1] = 0;
+}
 
 bool SharpUiHudLayer(int eye, ID3D11ShaderResourceView** srv, uint32_t* w, uint32_t* h, float* sx, float* sy) {
     eye &= 1;
-    if (!g_hudReady[eye].exchange(false) || !g_hudEyeSrv[eye]) return false;
+    // D-243 (owner: "in AFR the HUD following the head flickers - subtitles, button prompts"): each eye's HUD picture is
+    // copied when that eye renders - in AFR every other frame - and was taken once, so the eye not rendered this frame had
+    // no HUD layer: on / off every frame. In AFR an eye keeps its last HUD picture until its next one (at most 120 ms)
+    const bool fresh = g_hudReady[eye].exchange(false);
+    const ULONGLONG at = g_hudCopiedAt[eye].load();
+    const bool held = !fresh && EyesAfrOn() && at && GetTickCount64() - at < 120;
+    if ((!fresh && !held) || !g_hudEyeSrv[eye]) return false;
     *srv = g_hudEyeSrv[eye];
     *w = g_hudEyeW;
     *h = g_hudEyeH;
@@ -1342,8 +1354,17 @@ void SharpUiReticleObjectsMoved() { g_retObjAt = GetTickCount64(); }
 // ordinary paste puts it; the frost icon is bigger than the D-152 circle, so its outside stayed behind. ui_reticle_mode
 // 2 (default): no circle - the HUD is pasted once, whole, and the aim goes through the drawn reticle (mutate.cpp
 // AlignReticleToHead). 0 = the circle, 1 = D-149's moved reticle objects.
+// D-238 (owner: "fix the Atreus aiming icon not being centred - we made it centred before, then it split in two (like the
+// frost icon); now it is one piece again but not centred - stick the two parts together"): in the cinematic aim
+// sections (helping Atreus aim: his crosshair at UI 0.623 / 0.5, right of centre) mode 2 left the crosshair where the
+// game draws it. The D-104 circle centred it, but D-152 had halved its radius (0.06 -> 0.03) - smaller than Atreus'
+// crosshair, so half of it was moved and half stayed: the two parts. There the circle is back (mode 0) with radius
+// ui_reticle_cine_r 0.07 - the whole crosshair moves to the centre of the view; gameplay aiming stays mode 2 (the frost
+// icon). gowvr.ini ui_reticle_cine_circle 0 = mode 2 there too
 int SharpUiReticleMode() {
     static const int mode = (int)config::GetFloat("ui_reticle_mode", 2.f);
+    static const bool cineCircle = config::GetFloat("ui_reticle_cine_circle", 1.f) > 0.5f;
+    if (mode == 2 && cineCircle && fp::InCinematic()) return 0;
     return mode;
 }
 float SharpUiAspect() { return g_uiW && g_uiH ? (float)g_uiW / (float)g_uiH : 1.f; }

@@ -473,7 +473,7 @@ void ReticleSpot(float* u, float* v, float* r) {
         g[2] = config::GetFloat("ui_reticle_r", 0.0225f);  // D-152: half (was 0.045)
         g[3] = config::GetFloat("ui_reticle_cine_x", 0.623f);
         g[4] = config::GetFloat("ui_reticle_cine_y", 0.5f);
-        g[5] = config::GetFloat("ui_reticle_cine_r", 0.03f);  // D-152: half (was 0.06)
+        g[5] = config::GetFloat("ui_reticle_cine_r", 0.07f);  // D-152: half (was 0.06); D-238: 0.07 (Atreus' whole crosshair)
     }
     const bool cine = fp::InCinematic();
     *u = cine ? g[3] : g[0];
@@ -750,7 +750,8 @@ void __fastcall hk_RVBuild(uint8_t* rv, int kind, uint8_t* view, uint64_t p4) {
         // of pixels over 0.5 px (flat: 0) - DLSS / TAA rejected their history every frame. Now +0x00..+0x7f and
         // +0xc0..+0xff get THIS eye's last values before its build. gowvr.ini eye_history_fix 0 = as before.
         int eye = g_eyeIndex;
-        static const bool histFix = config::GetFloat("eye_history_fix", 1.f) > 0.5f;
+        static const bool histFixCfg = config::GetFloat("eye_history_fix", 1.f) > 0.5f;
+        const bool histFix = histFixCfg && DlssFixesActive();  // D-242: with DLSS on only
         if (g_eyeHistValid[eye]) {
             if (histFix) {
                 memcpy(rv + 0x00, g_eyeHist[eye], 128);

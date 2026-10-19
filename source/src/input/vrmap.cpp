@@ -339,7 +339,13 @@ void UpdateSwing(const vr::HandState& R, const vr::HandState& L, XINPUT_GAMEPAD*
     // Owner 2026-10-18 (Meta Quest, no finger sensing): squeezing the left grip lightly for a fist raised the shield by
     // accident - without finger data the RIGHT grip alone (a light squeeze) makes both hands fists, and the left grip is
     // only the shield
-    const bool fistR0 = FistHand(R);
+    // D-240 (owner: "for Meta Quest and controllers without finger sensing: instead of the right grip being squeezed,
+    // HOLD the Y button and it closes both fists - but it must not close the left shield"): no finger data on either
+    // hand -> both fists while the left upper button (Y) is held; the grips no longer make fists there (the left grip
+    // is only the shield). gowvr.ini fist_on_y 0 = the right-grip squeeze as before
+    static const bool fistOnY = config::GetFloat("fist_on_y", 1.f) > 0.5f;
+    const bool noFingers = fistOnY && !L.fingersValid && !R.fingersValid;
+    const bool fistR0 = noFingers ? L.b : FistHand(R);
     if (L.fingersValid ? FistHand(L) : fistR0) fistSeen[0] = now;
     if (fistR0) fistSeen[1] = now;
     const bool fistL = fistSeen[0] && now - fistSeen[0] <= fistHold, fistR = fistSeen[1] && now - fistSeen[1] <= fistHold;
@@ -963,7 +969,12 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     g_aimTrigger = L.active ? L.trigger : 0.f;
     if (L.active) {
         float ls[2] = {L.stick[0], L.stick[1]};
-        if (float a = g_locoYaw.load(); a != 0.f) {  // forward = the view direction (first person)
+        // D-235 (owner: "in the settings flat screen the left stick's input is reversed - horizontal is vertical and
+        // vertical is horizontal - PSVR2, and Quest 3 users too"): the rotation is set only while the first-person view is
+        // built (mutate.cpp), so on a 2D screen (menus, settings) the LAST gameplay F1 value stayed - about 90 deg with
+        // the head turned that way swapped the axes. Only in gameplay F1 and not on a 2D screen now
+        const bool locoOn = fp::FpMode() == 1 && !stereo::Screen2DFrame();
+        if (float a = g_locoYaw.load(); a != 0.f && locoOn) {  // forward = the view direction (first person)
             static const float sgn = config::GetFloat("loco_sign", 1.f) >= 0.f ? 1.f : -1.f;
             float ca = cosf(a * sgn), sa = sinf(a * sgn);
             ls[0] = L.stick[0] * ca - L.stick[1] * sa;
@@ -975,7 +986,11 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         // D-068: bare-handed / in Rage (F1) the shield waits a moment after the fist closes (see LeftShieldActive)
         if (fp::FpMode() == 1 && !plain ? LeftShieldActive(L, now, CurMode()) : g_gripHeld[0]) g->wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
         if (L.a) g->wButtons |= XINPUT_GAMEPAD_X;                          // Atreus
-        if (L.b) g->wButtons |= XINPUT_GAMEPAD_Y;                          // recall axe / triangle
+        // D-240: bare-handed / in Rage without finger sensing, Y held is the fists - not the game's Y (unless the axe is out
+        // of the hand, thrown: then it recalls as always)
+        const bool yIsFists = config::GetFloat("fist_on_y", 1.f) > 0.5f && !L.fingersValid && !R.fingersValid &&
+                              fp::FpMode() == 1 && (CurMode() == Mode::Bare || CurMode() == Mode::Rage) && !fp::AxeThrown();
+        if (L.b && !yIsFists) g->wButtons |= XINPUT_GAMEPAD_Y;             // recall axe / triangle
         static bool lbPrev = false;
         if (L.b && !lbPrev) fp::AxeRequest(true);                          // a recall: the axe may land in the IK hand
         lbPrev = L.b;
@@ -983,6 +998,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         if (lc && !combo && !lClickSent && now - lClickSince >= 60) lClickSent = true;
         if ((lc && !combo && lClickSent) || now < l3PulseUntil) g->wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
         if (L.trackpadForce > 0.6f) g->wButtons |= XINPUT_GAMEPAD_START;   // options
+        if (L.menu) g->wButtons |= XINPUT_GAMEPAD_START;  // D-236: the controller's own menu button (Quest left) = Start / Options
     }
     if (R.active) {
         // F1 gameplay: smooth turning at turn_speed, or snap turning (turning.cpp; the VR settings panel)
@@ -1102,22 +1118,20 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             if (!L.a && !L.b && !R.a && !R.b) {
                 chordOn = false;
                 if (!holdSent) {
-                    pulse = XINPUT_GAMEPAD_BACK;
+                    // D-237 (owner: "tapping all four face buttons = the three-lines button (Start / Options), holding
+                    // them = the game menu (map, skills, inventory)"): the tap is Start now (was View, 2026-10-17)
+                    pulse = XINPUT_GAMEPAD_START;
                     pulseUntil = now + 120;
-                    Log("vrmap: all four face buttons tapped -> the game menu (View / touchpad)");
+                    Log("vrmap: all four face buttons tapped -> Start / Options (the three-lines button)");
                 }
             } else {
                 g->wButtons &= (WORD)~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y);
                 if (!holdSent && all4 && now - chordSince >= holdMs) {
                     holdSent = true;
-                    if (PostKeyEdge(VK_ESCAPE, true)) {
-                        escUpAt = now + 100;
-                        Log("vrmap: all four face buttons held -> Esc (the game's Esc screen)");
-                    } else {  // no game window found: Options as before
-                        pulse = XINPUT_GAMEPAD_START;
-                        pulseUntil = now + 150;
-                        Log("vrmap: all four face buttons held -> Options (no game window for Esc)");
-                    }
+                    // D-237: holding them is the game menu (View / touchpad) - the Esc screen it opened is gone
+                    pulse = XINPUT_GAMEPAD_BACK;
+                    pulseUntil = now + 150;
+                    Log("vrmap: all four face buttons held -> the game menu (View / touchpad)");
                 }
             }
         }

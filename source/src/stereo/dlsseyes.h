@@ -16,6 +16,10 @@ void DlssLog(int evals);
 void DlssFind(int evals);  // dlss-vr diagnostic "dlssfind N": the counter that steps with the jitter phase
 // r1.cpp, game thread, every kick: true while the stereo view renders - the DLSS jitter phase count for VR (or back)
 void DlssVrFrame(bool stereo);
+// D-242 (owner: "without DLSS the VR view shimmers - make it work with and without DLSS: DLSS on = the new logic, off =
+// the old"): true while the DLSS-era stereo fixes apply - the game's DLSS is on (its flag 0x143e60c04), read live every
+// call (the game's graphics setting switches it). gowvr.ini dlss_fixes_auto 0 = the fixes always on (as before)
+bool DlssFixesActive();
 // mutate.cpp hk_RVBuild, after the main RenderView (kind 0) is built: eye 0 / 1, -1 = flat
 void DlssNoteProjection(int eye, const float* proj);
 

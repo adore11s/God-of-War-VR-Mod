@@ -77,6 +77,28 @@ std::atomic<int> g_renderEye{-1};
 std::mutex g_shotMu;
 std::atomic<bool> g_shotReq{false}, g_shotReady{false};
 std::vector<uint8_t> g_shotPx[2];
+// D-241 AFR: the frame's eye + views, queued at the frame's submission (game thread), taken at its Present (render thread)
+std::atomic<bool> g_afr{false};
+struct AfrEntry { int eye = 0; vr::EyeViews v; };
+SRWLOCK g_afrLock = SRWLOCK_INIT;
+AfrEntry g_afrQ[4];
+int g_afrHead = 0, g_afrN = 0;                 // (g_afrLock)
+AfrEntry g_afrPending;                         // game thread: the kick's entry until its submission
+bool g_afrPendingValid = false;
+vr::EyeViews g_afrEyeViews[2];                 // render thread: each eye's views when it was last captured
+bool g_afrHave[2] = {false, false};
+std::atomic<bool> g_afrFrameStart{true};       // the next stream executed starts a frame
+std::atomic<uint64_t> g_afrCaps{0}, g_afrMissing{0}, g_afrDropped{0};
+bool AfrFront(AfrEntry* out, bool pop) {
+    AcquireSRWLockExclusive(&g_afrLock);
+    const bool have = g_afrN > 0;
+    if (have) {
+        *out = g_afrQ[g_afrHead];
+        if (pop) { g_afrHead = (g_afrHead + 1) % 4; --g_afrN; }
+    }
+    ReleaseSRWLockExclusive(&g_afrLock);
+    return have;
+}
 UINT g_shotW = 0, g_shotH = 0, g_shotPitch[2] = {0, 0};
 DXGI_FORMAT g_shotFmt = DXGI_FORMAT_UNKNOWN;
 
@@ -156,6 +178,15 @@ void ReadbackEyes(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
 }
 
 void __fastcall hk_Submit(uint8_t* ctx) {
+    if (g_afr.load(std::memory_order_relaxed) && g_afrPendingValid &&
+        ctx == &G<uint8_t>(kCtxBase) + (size_t)G<int>(kFrameIdx) * kCtxSize) {  // D-241: the AFR frame's first chunk
+        AcquireSRWLockExclusive(&g_afrLock);
+        if (g_afrN == 4) { g_afrHead = (g_afrHead + 1) % 4; --g_afrN; ++g_afrDropped; }  // (never presented)
+        g_afrQ[(g_afrHead + g_afrN) % 4] = g_afrPending;
+        ++g_afrN;
+        ReleaseSRWLockExclusive(&g_afrLock);
+        g_afrPendingValid = false;
+    }
     const int n = g_pendingN.load();
     if (n > 0) {
         uint8_t* chunk0 = &G<uint8_t>(kCtxBase) + (size_t)G<int>(kFrameIdx) * kCtxSize;
@@ -176,6 +207,10 @@ void __fastcall hk_Submit(uint8_t* ctx) {
 }
 
 void __fastcall hk_Exec(uint8_t* stream) {
+    if (g_afr.load(std::memory_order_relaxed) && g_afrFrameStart.exchange(false)) {  // D-241: this frame's one eye
+        AfrEntry e;
+        if (AfrFront(&e, false)) g_renderEye = e.eye;
+    }
     o_Exec(stream);
     for (auto& slot : g_eye0LastStream) {
         uint8_t* last = slot.load();
@@ -238,6 +273,37 @@ void EyesOnPresent(IDXGISwapChain* sc) {
         g_eye0ThisFrame = false;
         return;
     }
+    if (g_afr.load()) {  // D-241: this frame rendered one eye - captured into its texture, paired with the other's last
+        g_eye0ThisFrame = false;
+        g_afrFrameStart = true;
+        AfrEntry e;
+        if (!AfrFront(&e, true)) { ++g_afrMissing; return; }
+        if (!CaptureEye(sc, e.eye)) return;
+        ++(e.eye ? g_eye1Caps : g_eye0Caps);
+        g_afrEyeViews[e.eye] = e.v;
+        g_afrHave[e.eye] = e.v.valid;
+        const uint64_t k = ++g_afrCaps;
+        if (k <= 4 || k % 900 == 0)
+            Log("eyes: AFR frame #%llu - eye %d captured (missing %llu, dropped %llu)", (unsigned long long)k, e.eye,
+                (unsigned long long)g_afrMissing.load(), (unsigned long long)g_afrDropped.load());
+        if (!g_afrHave[0] || !g_afrHave[1]) return;
+        const int o = e.eye ^ 1;
+        g_pairViews = e.v;  // this frame's (display time, serial ...) with the other eye as it was rendered
+        g_pairViews.pose[o] = g_afrEyeViews[o].pose[o];
+        g_pairViews.fov[o] = g_afrEyeViews[o].fov[o];
+        g_pairViews.ownFov[o] = g_afrEyeViews[o].ownFov[o];
+        g_pairThisFrame = true;
+        if (g_shotReq.exchange(false)) {
+            ID3D11Device* dev = nullptr;
+            g_eyeTex[0]->GetDevice(&dev);
+            ID3D11DeviceContext* ctx = nullptr;
+            dev->GetImmediateContext(&ctx);
+            ReadbackEyes(dev, ctx);
+            ctx->Release();
+            dev->Release();
+        }
+        return;
+    }
     if (!g_eye0ThisFrame) {
         ++g_missing;
         return;
@@ -274,6 +340,24 @@ void EyesEnable(bool on) {
 }
 
 bool EyesEnabled() { return g_on.load(); }
+void EyesAfr(bool on) {
+    if (g_afr.exchange(on) == on) return;
+    AcquireSRWLockExclusive(&g_afrLock);
+    g_afrHead = g_afrN = 0;
+    ReleaseSRWLockExclusive(&g_afrLock);
+    g_afrPendingValid = false;
+    g_afrHave[0] = g_afrHave[1] = false;  // (render thread state: a stale pair at the switch is skipped once)
+    g_afrFrameStart = true;
+    g_pendingN = 0;
+    for (auto& slot : g_eye0LastStream) slot = nullptr;
+    Log("eyes: AFR %s", on ? "on - one eye per frame, the other eye's last image reprojected" : "off - both eyes every frame");
+}
+void EyesAfrKick(int eye) {
+    g_afrPending.eye = eye & 1;
+    g_afrPending.v = g_frameViews;
+    g_afrPendingValid = true;
+}
+bool EyesAfrOn() { return g_afr.load(std::memory_order_relaxed); }
 int EyesRenderEye() { return g_renderEye.load(std::memory_order_relaxed); }
 
 void EyesSetFrameViews(const vr::EyeViews& v) { g_frameViews = v; }

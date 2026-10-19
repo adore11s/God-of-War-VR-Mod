@@ -1759,6 +1759,11 @@ void ArmsUpdate(bool active, const Mat4* handWorld /*[2] or null*/, const bool* 
                 a.curl[0] = fmaxf(a.curl[0], fminf(grip / 0.7f, 1.f));  // resting on the grip reads ~0.7 curl
                 a.curl[1] = fmaxf(a.curl[1], fc[1]);
             }
+            // D-240: controllers without finger sensing - holding Y is a closed fist on both hands (0.99 of the fist pose,
+            // set directly, not curled from the grips)
+            static const bool fistOnY = config::GetFloat("fist_on_y", 1.f) > 0.5f;
+            if (fistOnY && !in.hand[0].fingersValid && !in.hand[1].fingersValid && in.hand[0].b)
+                a.curl[0] = a.curl[1] = 0.99f;
             a.curl[1] = fmaxf(a.curl[1], a.curl[0]);  // the index closes with the grip too: no pointing hand (owner)
             a.curl[2] = fmaxf(a.curl[0], a.curl[1] * 0.6f);
             // holding the axe: the fingers keep the game's own grip animation around the handle (VRIK: held

@@ -49,6 +49,7 @@ struct HandState {
     float stick[2] = {0, 0};
     float trigger = 0, squeeze = 0, trackpadForce = 0;
     bool a = false, b = false, stickClick = false, triggerTouch = false;
+    bool menu = false;  // D-236: the controller's own menu button (Quest Touch left) - Start
     // Finger curl 0 (open) .. 1 (fist) from the runtime's hand skeleton (XR_EXT_hand_tracking driven by the
     // controller's finger sensing: PSVR2 touch sensors, Index capacitive grip, ...): thumb, index, middle, ring, little.
     float fingerCurl[5] = {0, 0, 0, 0, 0};

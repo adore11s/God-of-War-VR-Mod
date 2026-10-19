@@ -176,23 +176,121 @@ function Write-Ini([string]$path, $ini) {
     [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))  # no BOM, like the game's own file
 }
 
+# A recorded entry is "original" (an older launcher: what it set is in $Wanted) or "original|set" (this installer).
+function Split-Recorded([string]$k, [string]$v) {
+    $i = $v.IndexOf('|')
+    if ($i -ge 0) { return @($v.Substring(0, $i), $v.Substring($i + 1)) }
+    if ($Wanted.Contains($k)) { return @($v, $Wanted[$k]) }
+    return @($v, $null)
+}
+
 function Restore-Settings([string]$game) {
     $ini = Join-Path $game 'settings.ini'
     $rec = Read-Recorded
     if ($rec.Count -eq 0 -or -not (Test-Path -LiteralPath $ini)) { return }
     $data = Read-Ini $ini
     foreach ($k in $rec.Keys) {
+        $orig, $set = Split-Recorded $k $rec[$k]
         $cur = Get-IniValue $data.Lines $k
-        if ($null -ne $cur -and $Wanted.Contains($k) -and $cur -eq $Wanted[$k]) {  # still what the launcher set
+        if ($null -ne $cur -and $null -ne $set -and $cur -eq $set) {  # still what the mod's setup set
             $lines = $data.Lines
-            [void](Set-IniValue ([ref]$lines) $k $rec[$k])
-            Say "settings.ini: $k back to $($rec[$k])"
+            [void](Set-IniValue ([ref]$lines) $k $orig)
+            Say "settings.ini: $k back to $orig"
         } else {
             Say "settings.ini: $k left at $cur (changed by you since)"
         }
     }
     Write-Ini $ini $data
     [void](Send-ToRecycleBin ($ini + '.vrmod-backup') $game)
+    [void](Send-ToRecycleBin $StateSettings $game)
+}
+
+# ---- the game's graphics settings for VR (owner 2026-10-19) ------------------------------------------------------
+# Display mode Windowed, VSync off, frame rate limit off, motion blur 0, HDR off, and DLSS on with the chosen preset
+# (or off) - the player is asked about DLSS. The original values are recorded (settings_changed.txt) so the
+# uninstaller puts them back while they are still what this set. Anything that cannot be changed is listed with what
+# to set by hand in the game's graphics settings.
+function Set-VrGameSettings([string]$game) {
+    $manual = @{
+        'DisplayMode' = 'Display mode: Windowed'; 'Vsync' = 'VSync: Off'; 'FPSLimit' = 'Frame rate limit: Off'
+        'MotionBlur' = 'Motion blur: 0'; 'HDR' = 'HDR: Off'; 'DLSSQuality' = 'DLSS'; 'FSRQuality' = 'FSR: Off'
+    }
+    Write-Host ''
+    Say 'GAME SETTINGS FOR VR'
+    $nvidia = $false
+    try {
+        $nvidia = [bool](Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name -match 'NVIDIA' })
+    } catch { }
+    if ($nvidia) { Say 'An NVIDIA graphics card was found - DLSS is recommended.' }
+    else { Say 'No NVIDIA graphics card was found - DLSS needs one (NVIDIA RTX).' }
+    $dlss = $null
+    for ($try = 0; $try -lt 3 -and $null -eq $dlss; $try++) {
+        $a = (Read-Host '   Are you going to use DLSS? Type Y or N and press Enter').Trim()
+        if ($a -match '^(y|yes)$') { $dlss = $true } elseif ($a -match '^(n|no)$') { $dlss = $false }
+    }
+    if ($null -eq $dlss) { $dlss = $nvidia; Say "No answer - DLSS $(if ($dlss) { 'on' } else { 'off' })." }
+    $preset = 'Off'
+    $presetName = 'off'
+    if ($dlss) {
+        $names = @{ '1' = @('UltraPerformance', 'Ultra Performance'); '2' = @('Performance', 'Performance');
+                    '3' = @('Balanced', 'Balanced'); '4' = @('Quality', 'Quality') }
+        Say 'Which DLSS preset?  1 = Ultra Performance   2 = Performance   3 = Balanced   4 = Quality'
+        $pick = $null
+        for ($try = 0; $try -lt 3 -and $null -eq $pick; $try++) {
+            $a = (Read-Host '   Type 1, 2, 3 or 4 and press Enter').Trim()
+            if ($names.ContainsKey($a)) { $pick = $a }
+        }
+        if ($null -eq $pick) { $pick = '4'; Say 'No answer - Quality.' }
+        $preset = $names[$pick][0]
+        $presetName = $names[$pick][1]
+    }
+    $want = [ordered]@{ 'DisplayMode' = 'Windowed'; 'Vsync' = 'Off'; 'FPSLimit' = 'Off'; 'MotionBlur' = '0'; 'HDR' = 'Off';
+                        'DLSSQuality' = $preset }
+    if ($dlss) { $want['FSRQuality'] = 'Off' }  # (DLSS and FSR are one choice in the game)
+    $manual['DLSSQuality'] = $(if ($dlss) { "DLSS: $presetName" } else { 'DLSS: Off' })
+
+    $ini = Join-Path $game 'settings.ini'
+    $failed = @()
+    if (-not (Test-Path -LiteralPath $ini)) {
+        Warn 'The game settings file (settings.ini) was not found - the game creates it the first time it runs.'
+        Warn '(Or start the game once, close it, and run this installer again.)'
+        $failed = @($want.Keys)
+    } else {
+        try {
+            if (-not (Test-Path -LiteralPath ($ini + '.vrmod-backup'))) { Copy-Item -LiteralPath $ini -Destination ($ini + '.vrmod-backup') }
+            $data = Read-Ini $ini
+            $rec = Read-Recorded
+            $lines = $data.Lines
+            foreach ($k in $want.Keys) {
+                $old = Set-IniValue ([ref]$lines) $k $want[$k]
+                if ($null -eq $old) { $failed += $k; continue }
+                # the first original is kept (a second install must not record the mod's own values as yours)
+                $orig = $old
+                if ($rec.Contains($k)) { $orig = (Split-Recorded $k $rec[$k])[0] }
+                $rec[$k] = "$orig|$($want[$k])"
+            }
+            Write-Ini $ini $data
+            $out = foreach ($k in $rec.Keys) { "$k=$($rec[$k])" }
+            Set-Content -LiteralPath $StateSettings -Value $out -Encoding ASCII
+            # read back: the file really holds the values now
+            $check = Read-Ini $ini
+            foreach ($k in $want.Keys) {
+                if ($failed -contains $k) { continue }
+                if ((Get-IniValue $check.Lines $k) -ne $want[$k]) { $failed += $k }
+            }
+        } catch {
+            Warn "The game settings could not be changed ($($_.Exception.Message))."
+            $failed = @($want.Keys)
+        }
+    }
+    $done = @($want.Keys | Where-Object { $failed -notcontains $_ })
+    foreach ($k in $done) { Say "settings.ini: $($manual[$k])" }
+    if ($failed.Count -gt 0) {
+        Write-Host ''
+        Warn 'These game settings could NOT be changed by the installer.'
+        Warn 'Please set them yourself in the game (Settings -> Graphics / Display):'
+        foreach ($k in $failed) { Warn "   - $($manual[$k])" }
+    }
 }
 
 # =================================================================================================================
@@ -225,6 +323,8 @@ if ($Mode -eq 'Install') {
         Say 'version.dll: installed'
     }
     try { Unblock-File -LiteralPath $dst } catch { }
+
+    Set-VrGameSettings $game
 
     Write-Host ''
     Say 'Done. From now on just start God of War as usual (Steam, Epic, GOG or GoW.exe)'
