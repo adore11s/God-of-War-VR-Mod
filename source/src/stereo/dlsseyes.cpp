@@ -258,6 +258,107 @@ void CaptureMv(ID3D11DeviceContext* ctx, const NgxParams* p, int eye) {
     t->Release();
 }
 
+// Diagnostics (owner 2026-10-19: "better logging so I don't have to ask the testers several times; it must not lag"):
+// once a minute while DLSS runs in VR, each eye's motion vectors are checked - the copy goes to a staging texture and is
+// read on a LATER evaluation with D3D11_MAP_FLAG_DO_NOT_WAIT (never a stall), 1 pixel in 8 x 8. With the head and the
+// scene still, both eyes are ~0; the same sideways mean of opposite sign in the two eyes = the eyes' previous cameras
+// mixed (fixed in v0.2.3). gowvr.ini mv_health 0 = off.
+struct MvProbe {
+    ID3D11Texture2D* st = nullptr;
+    UINT w = 0, h = 0;
+    DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+    bool pending = false;
+    uint64_t round = 0;
+    float sx = 1.f, sy = 1.f;
+    unsigned subW = 0, subH = 0;
+    float meanX = 0.f, meanY = 0.f, absX = 0.f, absY = 0.f, over = 0.f;
+    bool done = false;
+};
+MvProbe g_mvProbe[2];
+uint64_t g_mvRound = 0;
+ULONGLONG g_mvNext = 0;
+void MvHealthTick(ID3D11DeviceContext* ctx, const NgxParams* p, int eye) {
+    static const bool on = config::GetFloat("mv_health", 1.f) > 0.5f;
+    if (!on || eye < 0 || eye > 1 || !ctx) return;
+    MvProbe& m = g_mvProbe[eye];
+    if (m.pending) {  // the copy from a previous frame: read it only if the GPU is done with it
+        D3D11_MAPPED_SUBRESOURCE ms{};
+        const HRESULT hr = ctx->Map(m.st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &ms);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return;
+        m.pending = false;
+        if (FAILED(hr)) return;
+        const bool half = m.fmt == DXGI_FORMAT_R16G16_FLOAT || m.fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
+        const unsigned stride = m.fmt == DXGI_FORMAT_R16G16B16A16_FLOAT || m.fmt == DXGI_FORMAT_R32G32B32A32_FLOAT ? 4 : 2;
+        double sxs = 0, sys = 0, ax = 0, ay = 0;
+        size_t n = 0, over = 0;
+        for (unsigned y = 4; y < m.subH; y += 8) {
+            const uint8_t* row = (const uint8_t*)ms.pData + (size_t)y * ms.RowPitch;
+            for (unsigned x = 4; x < m.subW; x += 8) {
+                float vx, vy;
+                if (half) { const uint16_t* q = (const uint16_t*)row + x * stride; vx = Half(q[0]); vy = Half(q[1]); }
+                else { const float* q = (const float*)row + x * stride; vx = q[0]; vy = q[1]; }
+                const float px = vx * m.sx, py = vy * m.sy;
+                sxs += px; sys += py; ax += fabsf(px); ay += fabsf(py);
+                if (px * px + py * py > 0.25f) ++over;
+                ++n;
+            }
+        }
+        ctx->Unmap(m.st, 0);
+        if (!n) return;
+        m.meanX = (float)(sxs / n); m.meanY = (float)(sys / n);
+        m.absX = (float)(ax / n); m.absY = (float)(ay / n);
+        m.over = 100.f * over / n;
+        m.done = true;
+        const MvProbe& a = g_mvProbe[0];
+        const MvProbe& b = g_mvProbe[1];
+        if (a.done && b.done && a.round == b.round) {
+            const bool mixed = fabsf(a.meanX) > 1.f && fabsf(b.meanX) > 1.f && a.meanX * b.meanX < 0.f;
+            Log("dlss: motion check #%llu (in pixels, head and scene as they were) - eye 0 mean %.2f %.2f, |%.2f %.2f|, "
+                "%.1f %% over 0.5 | eye 1 mean %.2f %.2f, |%.2f %.2f|, %.1f %% over 0.5%s", (unsigned long long)a.round,
+                a.meanX, a.meanY, a.absX, a.absY, a.over, b.meanX, b.meanY, b.absX, b.absY, b.over,
+                mixed ? " | WARNING opposite sideways means: the eyes' previous cameras look mixed" : "");
+            g_mvProbe[0].done = g_mvProbe[1].done = false;
+        }
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (!g_mvNext) g_mvNext = now + 30000;  // the first one 30 s into DLSS in VR, then every minute
+    if (now >= g_mvNext) { ++g_mvRound; g_mvNext = now + 60000; }
+    if (!g_mvRound || m.round == g_mvRound) return;
+    ID3D11Resource* r = nullptr;
+    if (p->Get("MotionVectors", &r) != kNgxOk || !r) return;
+    ID3D11Texture2D* t = nullptr;
+    if (FAILED(r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) || !t) return;
+    D3D11_TEXTURE2D_DESC d{};
+    t->GetDesc(&d);
+    if (!m.st || m.w != d.Width || m.h != d.Height || m.fmt != d.Format) {
+        if (m.st) { m.st->Release(); m.st = nullptr; }
+        D3D11_TEXTURE2D_DESC sd = d;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.BindFlags = 0;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        sd.MiscFlags = 0;
+        sd.MipLevels = sd.ArraySize = 1;
+        sd.SampleDesc = {1, 0};
+        ID3D11Device* dev = nullptr;
+        ctx->GetDevice(&dev);
+        if (dev) { dev->CreateTexture2D(&sd, nullptr, &m.st); dev->Release(); }
+        m.w = d.Width; m.h = d.Height; m.fmt = d.Format;
+    }
+    if (m.st) {
+        ctx->CopySubresourceRegion(m.st, 0, 0, 0, 0, t, 0, nullptr);
+        m.sx = GetF(p, "MV.Scale.X", 1.f);
+        m.sy = GetF(p, "MV.Scale.Y", 1.f);
+        m.subW = GetU(p, "DLSS.Render.Subrect.Dimensions.Width", d.Width);
+        m.subH = GetU(p, "DLSS.Render.Subrect.Dimensions.Height", d.Height);
+        if (m.subW > d.Width || !m.subW) m.subW = d.Width;
+        if (m.subH > d.Height || !m.subH) m.subH = d.Height;
+        m.round = g_mvRound;
+        m.pending = true;
+    }
+    t->Release();
+}
+
 std::atomic<int> g_logEvals{0};    // dlsslog N
 std::atomic<int> g_logBuilds{0};   // RenderView builds logged alongside
 std::atomic<uint64_t> g_resets[3];  // evaluations with Reset set: eye 0, eye 1, flat
@@ -326,6 +427,7 @@ NgxResult __cdecl hk_Eval(ID3D11DeviceContext* ctx, const void* handle, const vo
             FindStep(JitterPhase(GetF(p, "Jitter.Offset.X"), GetF(p, "Jitter.Offset.Y")));
             if (g_findSteps.fetch_sub(1) == 1) { g_cands.clear(); g_snap.clear(); g_findPhase = -1; }
         }
+        MvHealthTick(ctx, p, eye);  // once a minute in VR, never waits (diagnostics)
         if (g_mvCaps[eye < 0 ? 2 : eye].load() > 0 && g_mvCaps[eye < 0 ? 2 : eye].fetch_sub(1) == 1)
             CaptureMv(ctx, p, eye);
         if (g_jitSteps.load() > 0) {

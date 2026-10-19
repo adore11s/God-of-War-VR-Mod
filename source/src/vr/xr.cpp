@@ -103,6 +103,20 @@ XrSystemId g_sys = XR_NULL_SYSTEM_ID;
 XrSession g_sess = nullptr;
 XrSpace g_space = nullptr;
 XrSessionState g_state = XR_SESSION_STATE_UNKNOWN;
+ULONGLONG g_stateSince = 0;  // when g_state was last set (the stuck-session diagnostic)
+const char* StateName(XrSessionState s) {
+    switch ((int)s) {
+        case 1: return "IDLE - the runtime is not showing the game yet";
+        case 2: return "READY";
+        case 3: return "SYNCHRONIZED";
+        case 4: return "VISIBLE";
+        case 5: return "FOCUSED - running";
+        case 6: return "STOPPING";
+        case 7: return "LOSS_PENDING - the runtime is going away";
+        case 8: return "EXITING";
+        default: return "?";
+    }
+}
 bool g_running = false, g_frameBegun = false;
 XrFrameState g_frame{};
 XrView g_views[2]{};
@@ -589,6 +603,11 @@ bool CreateInstance() {
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, n, &n, ext.data()));
     bool d3d11 = false;
     for (auto& e : ext) d3d11 |= !strcmp(e.extensionName, "XR_KHR_D3D11_enable");
+    {   // diagnostics (owner 2026-10-19: "Link with Meta as OpenXR - VR doesn't work at all"): what this runtime offers
+        std::string list;
+        for (auto& e : ext) { list += ' '; list += e.extensionName; }
+        Log("xr: runtime offers %u extensions:%s", n, list.size() > 1800 ? (list.substr(0, 1800) + " ...").c_str() : list.c_str());
+    }
     if (!d3d11) { Log("xr: runtime lacks XR_KHR_D3D11_enable"); return false; }
     for (auto& e : ext) g_handExt |= !strcmp(e.extensionName, "XR_EXT_hand_tracking");
     const char* exts[] = {"XR_KHR_D3D11_enable", "XR_EXT_hand_tracking"};
@@ -832,6 +851,12 @@ bool CreateSession(ID3D11Device* dev) {
     for (int64_t want : {(int64_t)DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, (int64_t)DXGI_FORMAT_B8G8R8A8_UNORM_SRGB})
         for (int64_t f : fmts)
             if (!g_format && f == want) g_format = f;
+    {
+        char list[400] = "";
+        int len = 0;
+        for (size_t i = 0; i < fmts.size() && len < 360; ++i) len += sprintf_s(list + len, sizeof(list) - len, " %lld", fmts[i]);
+        Log("xr: swapchain formats offered (DXGI):%s -> using %lld (29 = RGBA8 sRGB, 91 = BGRA8 sRGB)", list, g_format);
+    }
     if (!g_format) { Log("xr: no sRGB 8-bit swapchain format offered"); return false; }
 
     XrViewConfigurationView vcv[2] = {{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
@@ -889,6 +914,17 @@ void PollEvents() {
         Log("xr: runtime recenter in effect -> recenter (once)");
         stereo::HeadcamRecenter();
     }
+    {   // diagnostics (owner 2026-10-19, Meta Link "VR doesn't work at all"): a session that never gets to showing the game
+        static ULONGLONG lastWarn = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (g_sess && g_stateSince && g_state != XR_SESSION_STATE_VISIBLE && g_state != XR_SESSION_STATE_FOCUSED &&
+            now - g_stateSince > 10000 && now - lastWarn > 60000) {
+            lastWarn = now;
+            Log("xr: WARNING session in state %d (%s) for %.0f s - the runtime is not showing the game (headset asleep, "
+                "Link / Virtual Desktop not connected, another VR app in front, or the runtime refused it)", (int)g_state,
+                StateName(g_state), (now - g_stateSince) / 1000.0);
+        }
+    }
     XrEventDataBuffer ev{XR_TYPE_EVENT_DATA_BUFFER};
     XrResult pr;
     while ((pr = xrPollEvent(g_inst, &ev)) == XR_SUCCESS /* XR_EVENT_UNAVAILABLE = 4 */) {
@@ -903,7 +939,8 @@ void PollEvents() {
         if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             auto* s = (XrEventDataSessionStateChanged*)&ev;
             g_state = s->state;
-            Log("xr: session state -> %d", (int)g_state);
+            g_stateSince = GetTickCount64();
+            Log("xr: session state -> %d (%s)", (int)g_state, StateName(g_state));
             if (g_state == XR_SESSION_STATE_READY && !g_running) {
                 XrSessionBeginInfo bi{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
                 XrResult r = xrBeginSession(g_sess, &bi);
@@ -1265,6 +1302,39 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
             Deg(r.angleUp), Deg(r.angleDown), fovW, fovH);
     } else {
         Log("summary: eye fov not located yet");
+    }
+    // diagnostics (owner 2026-10-19: Quest 3 "light flickers" on every runtime, PSVR2 fine): the headset's rate, the eyes'
+    // placement as the runtime reports it (right eye in the left eye's frame) and the GPU / driver
+    if (g_frame.predictedDisplayPeriod > 0)
+        Log("summary: headset refresh %.1f Hz (display period %.2f ms)", 1e9 / (double)g_frame.predictedDisplayPeriod,
+            g_frame.predictedDisplayPeriod / 1e6);
+    if (g_viewsValid) {
+        const XrPosef& a = g_views[0].pose;
+        const XrPosef& b = g_views[1].pose;
+        const float qa[4] = {-a.orientation.x, -a.orientation.y, -a.orientation.z, a.orientation.w};  // conjugate
+        const float dw[3] = {b.position.x - a.position.x, b.position.y - a.position.y, b.position.z - a.position.z};
+        float rel[3];
+        QRotate(qa, dw, rel);
+        const float dot = fabsf(a.orientation.x * b.orientation.x + a.orientation.y * b.orientation.y +
+                                a.orientation.z * b.orientation.z + a.orientation.w * b.orientation.w);
+        Log("summary: eyes - distance %.1f mm (right of the left eye %.1f, up %.1f, back %.1f mm), cant %.2f deg",
+            1000.f * sqrtf(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]), 1000.f * rel[0], 1000.f * rel[1], 1000.f * rel[2],
+            Deg(2.f * acosf(fminf(dot, 1.f))));
+    }
+    if (g_dev) {
+        IDXGIDevice* dx = nullptr;
+        IDXGIAdapter* ad = nullptr;
+        if (SUCCEEDED(g_dev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dx)) && SUCCEEDED(dx->GetAdapter(&ad))) {
+            DXGI_ADAPTER_DESC ds{};
+            ad->GetDesc(&ds);
+            LARGE_INTEGER umd{};
+            const bool v = SUCCEEDED(ad->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd));
+            Log("summary: GPU %ls (vendor 0x%04x, %llu MB), driver %u.%u.%u.%u", ds.Description, ds.VendorId,
+                (unsigned long long)(ds.DedicatedVideoMemory >> 20), v ? HIWORD(umd.HighPart) : 0u,
+                v ? LOWORD(umd.HighPart) : 0u, v ? HIWORD(umd.LowPart) : 0u, v ? LOWORD(umd.LowPart) : 0u);
+        }
+        if (ad) ad->Release();
+        if (dx) dx->Release();
     }
     // the game's picture, its window and the monitor it is on (true pixels, whatever the Windows scaling)
     RECT cr{};
@@ -1651,6 +1721,17 @@ void BeginFrame() {
     if (!Succeeded(r)) { NoteLoss(r); Log("xr: xrBeginFrame %s", ResultStr(r).c_str()); return; }
     g_frameBegun = true;
     ++g_frames;
+    {   // diagnostics: long runs of frames the runtime does not want drawn (shouldRender 0: the game is not shown)
+        static uint64_t noRender = 0;
+        if (!g_frame.shouldRender) {
+            if (++noRender == 300 || noRender % 3000 == 0)
+                Log("xr: WARNING %llu frames in a row with shouldRender 0 (state %d %s) - the runtime shows no picture of the "
+                    "game", (unsigned long long)noRender, (int)g_state, StateName(g_state));
+        } else {
+            if (noRender >= 300) Log("xr: the runtime shows the game again after %llu frames", (unsigned long long)noRender);
+            noRender = 0;
+        }
+    }
     XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
                         g_frame.predictedDisplayTime, g_space};
     XrViewState vs{XR_TYPE_VIEW_STATE};
