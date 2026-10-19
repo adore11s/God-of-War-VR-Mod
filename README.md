@@ -17,8 +17,8 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
 - **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
-- **Finishers:** face the enemy from the front. Pick first or third person in the VR settings panel.
 - **Fists:** rest your fingers on the grips. Squeezing the left grip fully is the shield. Meta Quest: **hold Y**.
+- **Finishers:** face the enemy from the front. Pick first or third person in the VR settings panel.
 
 ## What the mod does
 
