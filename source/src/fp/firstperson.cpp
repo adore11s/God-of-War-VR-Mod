@@ -96,6 +96,16 @@ static bool ScriptedName(const char* a) {
     // csragegrabtroll00enter, csRageBeatdownTroll00Idle, csRageBeatdownTroll00Finisher. Any cs* move on a troll and the
     // csRage* grab / beatdown family; the draugr rage kills (csDraugr00BareRage*) stay ordinary combat
     if (low[0] == 'c' && low[1] == 's' && (strstr(low, "troll") || strncmp(low, "csrage", 6) == 0)) return true;
+    // D-227 (owner: "the little cinematic in the hands of the big giant shouldn't be in F1 but in F3", "at the very end
+    // Kratos with his shield up and Atreus behind him should be in F3"; owner log: phase0_csTransitionToPhase1 / _Loop and
+    // phase1_csbaldurentrance ran in F1 as sync moves): a boss fight's scripted phase moves (phase<N>_cs*), and the
+    // blizzard's shield moves csMaMoSnowBlindBlockEnter / Idle (csMaMo*; the walk navSnowBlindShuffle* stays F1)
+    if (strncmp(low, "phase", 5) == 0) {
+        const char* p = low + 5;
+        while (*p >= '0' && *p <= '9') ++p;
+        if (p > low + 5 && p[0] == '_' && p[1] == 'c' && p[2] == 's') return true;
+    }
+    if (strncmp(low, "csmamo", 6) == 0) return true;
     return strstr(low, "cine") != nullptr;
 }
 static bool ScriptedScene() {
@@ -146,7 +156,9 @@ static bool ShopScene() {
 // ordinary combat). Held 0.5 s past the last such frame (the kills chain a few moves). gowvr.ini finisher_third_person.
 static bool FinisherName(const char* a) {
     if (!a || _strnicmp(a, "cs", 2) != 0) return false;
-    return _strnicmp(a, "csbaldur", 8) != 0 && _strnicmp(a, "csmma", 5) != 0 && _strnicmp(a, "csdef", 5) != 0;
+    // (D-227: nor the blizzard's scripted shield moves csMaMo* - cutscenes, ScriptedName)
+    return _strnicmp(a, "csbaldur", 8) != 0 && _strnicmp(a, "csmma", 5) != 0 && _strnicmp(a, "csdef", 5) != 0 &&
+           _strnicmp(a, "csmamo", 6) != 0;
 }
 static bool FinisherScene() {
     if (config::GetFloat("finisher_third_person", 0.f) < 0.5f) return false;

@@ -303,6 +303,7 @@ std::atomic<uint8_t*> g_heroSkel{nullptr};
 SRWLOCK g_rootLock = SRWLOCK_INIT;
 float g_gameRoot[4] = {0, 0, 0, 0}, g_renderRoot[4] = {0, 0, 0, 0};  // x, y, z, yaw
 Mat4 g_gameRootM{};  // guarded by g_rootLock
+Mat4 g_renderRootM{};  // D-229j: the drawn root of the last hero world pass (g_rootLock)
 std::atomic<float> g_pivotRight{0.f}, g_pivotBack{0.f};
 std::atomic<float> g_eyeShiftR{0.f}, g_eyeShiftB{0.f};  // D-114: drawn body moved under the view (firstperson.cpp)
 std::atomic<float> g_bodyTestOffset{0.f};  // diagnostic "bodyoff <deg>": standing target = game facing + offset
@@ -2105,7 +2106,8 @@ SRWLOCK g_linkedLock = SRWLOCK_INIT;
 LinkedItem g_linked[kLinkedMax];
 int g_linkedCount = 0;                                // under g_linkedLock
 std::atomic<uint8_t*> g_linkedSkel[kLinkedMax];       // lock-free membership test for the world-pass hook
-std::atomic<uint32_t> g_lkPlaced{0}, g_lkLearn{0}, g_lkReject{0}, g_lkNotSettled{0}, g_lkNoJoint{0}, g_lkTal{0};
+std::atomic<uint32_t> g_lkPlaced{0}, g_lkLearn{0}, g_lkReject{0}, g_lkNotSettled{0}, g_lkNoJoint{0}, g_lkTal{0},
+    g_talKept{0};  // D-229e: talisman passes already on the drawn belt
 
 static bool LinkNear(const Mat4& a, const Mat4& b, float d) {
     const float x = a.m[3][0] - b.m[3][0], y = a.m[3][1] - b.m[3][1], z = a.m[3][2] - b.m[3][2];
@@ -2158,9 +2160,10 @@ static void LinkedReport() {
     ULONGLONG t0 = tLog.load();
     if (!t0) tLog = now;
     else if (now - t0 >= 15000 && tLog.compare_exchange_strong(t0, now))
-        Log("fp: items on Kratos' joints, 15 s: %u passes placed on the drawn joint (talisman %u), offset learned %u / "
-            "rejected %u, not settled %u, joint unpublished %u", g_lkPlaced.exchange(0), g_lkTal.exchange(0),
-            g_lkLearn.exchange(0), g_lkReject.exchange(0), g_lkNotSettled.exchange(0), g_lkNoJoint.exchange(0));
+        Log("fp: items on Kratos' joints, 15 s: %u passes placed on the drawn joint (talisman %u moved, %u already on the "
+            "drawn belt), offset learned %u / rejected %u, not settled %u, joint unpublished %u", g_lkPlaced.exchange(0),
+            g_lkTal.exchange(0), g_talKept.exchange(0), g_lkLearn.exchange(0), g_lkReject.exchange(0),
+            g_lkNotSettled.exchange(0), g_lkNoJoint.exchange(0));
 }
 // D-165 (owner log D-162: rejected 91-602 / learned 700-1260 per 15 s, "not settled" up to 522 - Mimir swings on his
 // joint, so a rigid learned offset kept being rejected and reset): the offset is taken from every consistent game pass
@@ -2226,7 +2229,35 @@ constexpr uint64_t kTalismanRootHash = 0xb1098415d96da4b2ull;
 SRWLOCK g_talLock = SRWLOCK_INIT;
 LinkState g_talSt;
 uint8_t* g_talSkel = nullptr;
+// D-229e: set when the pass is the talisman's and D-229d already found it on the drawn belt (left as it is: no other rule
+// may move it - the carried-item glue placed those passes at its own learned spot, owner: "the talisman keeps moving from
+// one place to another, like glitching")
+thread_local bool t_talismanKept = false;
+// D-229g diagnostic "taltrace N": the next N talisman passes (moved / kept, where they were built) and, while it runs,
+// the talisman's cached root right before each eye's kick (where it is drawn) - both against the drawn and the game belt
+std::atomic<int> g_talTrace{0};
+void TalismanTrace(int n) { g_talTrace = n; Log("taltrace: next %d talisman passes and its drawn spot at each kick", n); }
+static bool LiveGameJoint(int j, Mat4* out);
+void TalismanDrawSample(int eye) {
+    if (g_talTrace.load(std::memory_order_relaxed) <= 0) return;
+    uint8_t* tk = g_talSkel;
+    if (!tk) return;
+    static const uint64_t kBelt = 0xf1bc14299243b4e3ull;
+    const int bj = FindJointByHash(kBelt);
+    Mat4 G, D;
+    if (bj < 0 || !LiveGameJoint(bj, &G) || !StableJoint(kBelt, &D)) return;
+    const int n = (int)(uint16_t)*(int16_t*)(tk + 0x38);
+    const Mat4 T = *(const Mat4*)(*(const uint8_t**)(tk + 0x58) + (size_t)n * 0x40);  // its root's world, as cached
+    const Mat4 tD = Mul(T, AffineInverse(D)), tG = Mul(T, AffineInverse(G));
+    auto len = [](const Mat4& m) { return sqrtf(m.m[3][0] * m.m[3][0] + m.m[3][1] * m.m[3][1] + m.m[3][2] * m.m[3][2]); };
+    const float sc = sqrtf(T.m[0][0] * T.m[0][0] + T.m[0][1] * T.m[0][1] + T.m[0][2] * T.m[0][2]);
+    Log("taltrace: DRAW eye %d | talisman in drawn-belt frame (%.3f %.3f %.3f) %.3f m, in game-belt frame (%.3f %.3f "
+        "%.3f) %.3f m, scale %.3f | frame %llu", eye, tD.m[3][0], tD.m[3][1], tD.m[3][2], len(tD), tG.m[3][0], tG.m[3][1],
+        tG.m[3][2], len(tG), sc, (unsigned long long)g_frameNo.load());
+}
+static void NoteItemCorrection(uint8_t* skel, const float* game, const float* drawn);  // D-229 (below)
 static bool TalismanFix(uint8_t* skel, const float* root, float* out) {
+    t_talismanKept = false;
     if (!LinkedOn() || FpMode() != 1 || !root || fabsf(root[12]) + fabsf(root[13]) + fabsf(root[14]) < 1.f) return false;
     const int nj = (int)(uint16_t)*(int16_t*)(skel + 0x38);
     if (nj < 2 || nj > 16) return false;
@@ -2237,6 +2268,69 @@ static bool TalismanFix(uint8_t* skel, const float* root, float* out) {
     if (bj < 0) return false;
     const uint8_t* mm = *(const uint8_t**)(skel + 0x58);
     const bool selfFed = (const uint8_t*)root >= mm && (const uint8_t*)root < mm + (size_t)nj * 0x80;
+    // D-229d (owner: the cave light "comes out of the talisman" and two lights fight; owner logs D-229/229c: the item
+    // summary's "not settled" 105-811 per 15 s, talisman passes placed 0-785 per 15 s): the rigid learned offset below kept
+    // failing - the talisman swings on the belt, and its passes come built from BOTH belts (the drawn one when Kratos'
+    // cache is current, the game's otherwise), so C against the game's belt was two-valued and reset again and again;
+    // every pass while unsettled stayed on the game's body - the talisman and its light jumped between the two belts.
+    // Now, per pass, no learning: a pass nearer the game's belt joint than the drawn one (by 2 cm) is moved by the
+    // belt's own change, root x game belt^-1 x drawn belt (its swing kept); a pass already on the drawn belt is left.
+    // Holds too (the game body lunges, the drawn one stays). gowvr.ini talisman_per_pass 0 = the learned offset.
+    static const bool perPass = config::GetFloat("talisman_per_pass", 1.f) > 0.5f;
+    if (perPass) {
+        {
+            AcquireSRWLockExclusive(&g_talLock);
+            if (g_talSkel != skel) {
+                Log("fp: talisman found (skeleton %p, %d joints) - each pass on the drawn belt joint in F1 (D-229d)", skel, nj);
+                g_talSkel = skel;
+            }
+            ReleaseSRWLockExclusive(&g_talLock);
+        }
+        Mat4 G, D;
+        t_talismanKept = true;  // (the talisman's pass: no other rule from here on, moved or not)
+        if (selfFed || !LiveGameJoint(bj, &G) || !StableJoint(kBelt, &D)) { ++g_lkNoJoint; return false; }
+        const Mat4& R = *(const Mat4*)root;
+        auto d = [](const Mat4& a, const Mat4& b) {
+            const float x = a.m[3][0] - b.m[3][0], y = a.m[3][1] - b.m[3][1], z = a.m[3][2] - b.m[3][2];
+            return sqrtf(x * x + y * y + z * z);
+        };
+        // D-229i (owner: "still blinking, appearing and disappearing very fast - that's what you need to fix"; LIVE
+        // memory read of the owner's game, 2.5 s at ~0.01 ms: the talisman's 7 joints move as one, and 6 times it jumped
+        // 0.24-0.26 m for ONE frame and back): the D-229d test "nearer the game's belt joint than the drawn one" is
+        // ambiguous - the talisman hangs ~0.24 m from that joint, about as far as the two belts are apart, so a pass
+        // already on the drawn belt could sit nearer the game's joint and was "moved" by the belts' difference for that
+        // frame. Decided by continuity now: its offset from each belt (root x belt^-1) against the offset accepted on the
+        // last pass - the true one hardly changes between passes (a swing), the wrong one is off by the belts' whole
+        // difference. (No recent offset: the old distance test.)
+        const Mat4 Lg = Mul(R, AffineInverse(G)), Ld = Mul(R, AffineInverse(D));
+        bool move;
+        {
+            static Mat4 Lprev{};
+            static uint64_t lFrame = 0;
+            const uint64_t fr = g_frameNo.load();
+            AcquireSRWLockExclusive(&g_talLock);
+            if (lFrame && fr - lFrame <= 30) move = d(Lg, Lprev) + 0.01f < d(Ld, Lprev);
+            else move = d(R, G) + 0.02f < d(R, D);
+            Lprev = move ? Lg : Ld;
+            lFrame = fr;
+            ReleaseSRWLockExclusive(&g_talLock);
+        }
+        // D-229h: the belt's own change is the talisman's correction on EVERY pass (D-229 recorded it only on moved ones -
+        // owner taltrace: 9 moved / 391 already drawn - so reads through the talisman, its light's, were mostly left)
+        NoteItemCorrection(skel, &G.m[0][0], &D.m[0][0]);
+        if (g_talTrace.load(std::memory_order_relaxed) > 0 && g_talTrace.fetch_sub(1) > 0) {
+            const Mat4 rD = Mul(R, AffineInverse(D)), rG = Mul(R, AffineInverse(G));
+            Log("taltrace: pass %s thread %u | root in drawn-belt frame (%.3f %.3f %.3f) %.3f m, in game-belt frame "
+                "(%.3f %.3f %.3f) %.3f m | belts %.3f m apart | frame %llu", move ? "MOVED" : "kept ", GetCurrentThreadId(),
+                rD.m[3][0], rD.m[3][1], rD.m[3][2], d(R, D), rG.m[3][0], rG.m[3][1], rG.m[3][2], d(R, G), d(G, D),
+                (unsigned long long)g_frameNo.load());
+        }
+        if (!move) { ++g_talKept; return false; }  // already on the drawn belt (or they agree)
+        const Mat4 W = Mul(Mul(R, AffineInverse(G)), D);
+        memcpy(out, &W, sizeof(W));
+        ++g_lkTal;
+        return true;
+    }
     Mat4 Pg;
     const bool haveGame = !selfFed && CombatHoldWeight() <= 0.001f && LiveGameJoint(bj, &Pg);
     LinkState st;
@@ -4009,6 +4103,208 @@ std::atomic<uint32_t> g_glCalls[2], g_glMoved[2], g_glOnDrawn[2], g_glFar[2], g_
 // corrected the same way now (counted apart: "type 4"). And during held attacks the axe's cache can hold the game's axe
 // moved back onto the drawn body by the lunge ghost (D-081: game root -> drawn root) before FixAttached puts it on the
 // hand - a read there sat on neither axe (D-168: 1300-2700 per 10 s in fights); that "ghost" axe is a third candidate.
+// D-229 (owner: in a dark cave "an artificial flashlight on my character - in first person it flickers"; "in both eyes
+// it keeps switching between a light on the left and a light on the right, they fight over each other"; "the light
+// comes out of the talisman"; "when attacking the light moves a bit further"): the talisman's (or Mimir's) light reads
+// its parent's world through the item's link (sub_14058c560): the item's world cache when current - the DRAWN item,
+// glued by D-162 - else the joint from the item's locals on the GAME's body (turned with the game's facing, not
+// shifted under the view, lunged in attacks): two places, frame by frame. Every item the mod moves onto the drawn body
+// (D-162 linked items, the talisman, carried items) records its correction K = game root^-1 x drawn root; a link read
+// through such an item in gameplay F1 that lands nearer  answer x K  than the answer itself (both against the item's
+// current cache) gets  answer x K . Hero joints read directly are only counted ("hero-joint reads on the game's body",
+// the published joints). gowvr.ini drawn_item_links 0 = off.
+struct ItemCorr { std::atomic<uint8_t*> skel{nullptr}; Mat4 K{}; uint64_t frame = 0; };
+constexpr int kItemCorrMax = 16;
+ItemCorr g_itemCorr[kItemCorrMax];
+SRWLOCK g_itemCorrLock = SRWLOCK_INIT;
+std::atomic<uint32_t> g_icMoved{0}, g_icKept{0}, g_icHeroGame{0}, g_icHeroDrawn{0}, g_icHeroMoved{0}, g_icHeroOn{0};
+std::atomic<int> g_icHeroGameJoint{-1};
+static bool DrawnItemLinks() {
+    static const bool on = config::GetFloat("drawn_item_links", 1.f) > 0.5f;
+    return on;
+}
+static void NoteItemCorrection(uint8_t* skel, const float* game, const float* drawn) {
+    if (!skel || !game || !drawn || !DrawnItemLinks()) return;
+    if (fabsf(game[15] - 1.f) > 1e-3f || fabsf(game[12]) + fabsf(game[13]) + fabsf(game[14]) < 1.f) return;
+    const Mat4 K = Mul(AffineInverse(*(const Mat4*)game), *(const Mat4*)drawn);
+    const uint64_t f = g_frameNo.load();
+    AcquireSRWLockExclusive(&g_itemCorrLock);
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < kItemCorrMax; ++i) {
+        if (g_itemCorr[i].skel.load(std::memory_order_relaxed) == skel) { slot = i; break; }
+        if (g_itemCorr[i].frame < g_itemCorr[oldest].frame) oldest = i;
+    }
+    if (slot < 0) slot = oldest;
+    g_itemCorr[slot].K = K;
+    g_itemCorr[slot].frame = f;
+    g_itemCorr[slot].skel.store(skel, std::memory_order_release);
+    ReleaseSRWLockExclusive(&g_itemCorrLock);
+}
+static bool ItemCorrection(uint8_t* skel, Mat4* K) {
+    int slot = -1;
+    for (int i = 0; i < kItemCorrMax && slot < 0; ++i)
+        if (g_itemCorr[i].skel.load(std::memory_order_relaxed) == skel) slot = i;
+    if (slot < 0) return false;
+    AcquireSRWLockShared(&g_itemCorrLock);
+    const bool ok = g_itemCorr[slot].skel.load(std::memory_order_relaxed) == skel &&
+                    g_frameNo.load() - g_itemCorr[slot].frame <= 3;  // (a correction from this or the last frames)
+    if (ok) *K = g_itemCorr[slot].K;
+    ReleaseSRWLockShared(&g_itemCorrLock);
+    return ok;
+}
+static uint8_t* ObjSkeletonSeh(uint8_t* obj) {
+    __try { return *(uint8_t**)(obj + 0x238); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+static void* ReadPtrSeh(uint8_t* p) {
+    __try { return *(void**)p; } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+// D-229f: a skeleton of any size (the talisman has 7 joints, effects 3 - PlausibleSkeleton wants >= 20)
+static bool AnySkeletonSeh(uint8_t* sk) {
+    __try {
+        const int n = (int)(uint16_t)*(const int16_t*)(sk + 0x38);
+        const uint64_t* h = *(const uint64_t* const*)(sk + 0x30);
+        const uint8_t* m = *(const uint8_t* const*)(sk + 0x58);
+        if (n < 1 || n > 2000 || !h || !m) return false;
+        volatile uint64_t h0 = h[0];
+        volatile float m0 = *(const float*)(m + (size_t)n * 0x40 + 0x3c);  // joint 0's world, w of its translation row
+        (void)h0;
+        return m0 > 0.999f && m0 < 1.001f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// a game object's name (+0x38) when the owner is one (else false)
+static bool ObjNameSeh(uint8_t* obj, char* buf, size_t n) {
+    __try {
+        const char* s = *(const char**)(obj + 0x38);
+        if (!s) return false;
+        size_t i = 0;
+        for (; i + 1 < n && s[i]; ++i) {
+            if ((unsigned char)s[i] < 0x20 || (unsigned char)s[i] > 0x7e) return false;
+            buf[i] = s[i];
+        }
+        buf[i] = 0;
+        return i > 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static float MatDist(const Mat4& a, const Mat4& b) {
+    const float x = a.m[3][0] - b.m[3][0], y = a.m[3][1] - b.m[3][1], z = a.m[3][2] - b.m[3][2];
+    return sqrtf(x * x + y * y + z * z);
+}
+bool PubJointByIndex(int j, Mat4* out);  // a published hero joint by index (below)
+static void ItemLinkReport() {
+    static std::atomic<ULONGLONG> tLog{0};
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG t0 = tLog.load();
+    if (!t0) tLog = now;
+    else if (now - t0 >= 15000 && tLog.compare_exchange_strong(t0, now)) {
+        const uint32_t mv = g_icMoved.exchange(0), kp = g_icKept.exchange(0), hg = g_icHeroGame.exchange(0),
+                       hd = g_icHeroDrawn.exchange(0);
+        const uint32_t hm = g_icHeroMoved.exchange(0), ho = g_icHeroOn.exchange(0);
+        if (mv || kp || hg || hd || hm || ho)
+            Log("fp: reads through items on Kratos, 15 s: %u moved from the game's body onto the drawn item, %u already "
+                "drawn | reads of his joints by other objects / effects / lights: %u moved onto the drawn joint (last "
+                "joint %d), %u already on it (D-229, drawn_item_links)", mv, kp, hm, g_icHeroGameJoint.load(), ho);
+            (void)hg; (void)hd;
+    }
+}
+static void ItemLinkFix(uint8_t* link, float* out, uint8_t* parent) {
+    uint8_t* psk = ObjSkeletonSeh(parent);
+    if (!psk) return;
+    const int j = *(const int16_t*)(link + 0xac);
+    if (psk == g_heroSkel.load(std::memory_order_relaxed)) {
+        // D-229b (owner: "still fighting"; owner log D-229: reads through the items 484 moved / 3464 drawn, but hero-joint
+        // reads 112 on the game's body / 195 drawn, the last on joint 471 = JOMimirWeapon1, where Mimir hangs): the light
+        // hangs on the item's KRATOS joint itself. Reads of the joints his linked items hang on get the published drawn
+        // joint - except the item object's own link (D-162 learns its offset from the game's parent world there)
+        // D-229c (owner: "still fighting"; owner log D-229b: "their Kratos joints: 0 moved, 0 already on it" - joint 471 is
+        // read only by Mimir's own link - while his other joints were read on the game's body mostly at joint 271, the
+        // lower back the talisman is measured against): STATIC - an object's / effect's / light's world is
+        // sub_140553eb0(transform holder +0x60, out) = its local x sub_14058c560(holder + 0x40 = the owner + 0xa0) - one
+        // path for everything, so the reader is told apart by its OWNER (link - 0xa0; a game object's skeleton at +0x238,
+        // its name at +0x38). Every read of a published Kratos joint (not the arms, the weapon point, the sheathed axe's
+        // joint) by an owner the mod does not place itself gets the published DRAWN joint when the answer is > 1 cm off
+        // it. Owners the mod places (axe, shield, Blades' objects, talisman, items on his joints, carried items) keep
+        // the game's answer - their own placement learns from it
+        if (j < 0) return;
+        static std::atomic<uint8_t*> armsFor{nullptr};
+        static std::atomic<int> arm[2] = {-1, -1}, melee{-1};
+        if (armsFor.load(std::memory_order_relaxed) != psk) {
+            arm[0] = FindJointByHash(0x05c2b5ca793d4bf2ull);
+            arm[1] = FindJointByHash(0xe783988515993319ull);
+            melee = FindJointByHash(0xb41408d8ad410271ull);  // JOMeleeWeapon2
+            armsFor = psk;
+        }
+        for (int s = 0; s < 2; ++s) {
+            const int a = arm[s].load(std::memory_order_relaxed);
+            if (a >= 0 && (j == a || IsDescendant(j, a))) return;  // (the arms follow the controllers: own rules)
+        }
+        if (j == melee.load(std::memory_order_relaxed) || j == g_axeBackJoint.load(std::memory_order_relaxed)) return;
+        // D-229j (owner: "the talisman isn't moving anymore but the light is still an issue"; owner log D-229i: the only
+        // named reader moved was SNDKratos): any non-arm joint, not only the published ones - the body's own correction
+        // this frame, K = game root^-1 x drawn root (the hero pass builds the same locals on either root), chosen when
+        // answer x K is nearer the live cache entry (the drawn joint, current or a frame old) than the answer
+        Mat4 Kh;
+        {
+            AcquireSRWLockShared(&g_rootLock);
+            Kh = Mul(AffineInverse(g_gameRootM), g_renderRootM);
+            ReleaseSRWLockShared(&g_rootLock);
+        }
+        const int hn = (int)(uint16_t)*(int16_t*)(psk + 0x38);
+        const uint8_t* hm = *(const uint8_t**)(psk + 0x58);
+        if (j >= hn || !hm) return;
+        const Mat4 C = *(const Mat4*)(hm + ((size_t)hn + j) * 0x40);
+        const Mat4 D = Mul(*(const Mat4*)out, Kh);
+        if (MatDist(D, C) + 0.02f < MatDist(*(const Mat4*)out, C)) {
+            // owner checks only for a read that would change (the common, already drawn read stays cheap)
+            uint8_t* owner = link - 0xa0;
+            for (auto& b : g_bladeObjs)
+                if (b.load(std::memory_order_relaxed) == owner) return;
+            // a SKINNED owner keeps the game's answer: every skinned object's placement is the world-pass rules' job
+            // (axe, shield, Blades, bow, talisman, Mimir, carried items - several learn from the game's answer). Only
+            // owners without a skeleton - lights, emitters, sounds - get the drawn joint here
+            if (uint8_t* osk = ObjSkeletonSeh(owner); osk && (osk == psk || AnySkeletonSeh(osk))) return;
+            memcpy(out, &D, sizeof(D));
+            ++g_icHeroMoved;
+            g_icHeroGameJoint = j;
+            static std::atomic<uint8_t*> named[12];  // each reader once (D-229c's log: SNDKratos took all 12 lines)
+            bool seen = false;
+            int freeSlot = -1;
+            for (int i = 0; i < 12; ++i) {
+                uint8_t* o = named[i].load(std::memory_order_relaxed);
+                if (o == owner) { seen = true; break; }
+                if (!o && freeSlot < 0) freeSlot = i;
+            }
+            if (!seen && freeSlot >= 0) {
+                uint8_t* expect = nullptr;
+                if (named[freeSlot].compare_exchange_strong(expect, owner)) {
+                    char nm[48];
+                    if (!ObjNameSeh(owner, nm, sizeof(nm))) strcpy_s(nm, "(no name)");
+                    Log("fp: '%s' (%p, vtable %p) read Kratos joint %d on the game's body - given the drawn joint "
+                        "(D-229j)", nm, owner, ReadPtrSeh(owner), j);
+                }
+            }
+        } else {
+            ++g_icHeroOn;
+        }
+        ItemLinkReport();
+        return;
+    }
+    Mat4 K;
+    if (!ItemCorrection(psk, &K)) return;
+    const int pn = (int)(uint16_t)*(int16_t*)(psk + 0x38);
+    const uint8_t* pm = *(const uint8_t**)(psk + 0x58);
+    if (j < 0 || j >= pn || !pm) return;
+    const Mat4 A = *(const Mat4*)out;
+    const Mat4 B = Mul(A, K);
+    const Mat4 D = *(const Mat4*)(pm + ((size_t)pn + j) * 0x40);  // the item's cache (the drawn item once glued)
+    if (MatDist(B, D) + 0.02f < MatDist(A, D)) {
+        memcpy(out, &B, sizeof(B));
+        ++g_icMoved;
+    } else {
+        ++g_icKept;
+    }
+    ItemLinkReport();
+}
+
 float* __fastcall hk_LinkWorld(uint8_t* link, float* out, char flag) {
     float* r = o_LinkWorld(link, out, flag);
     if (!link || !out) return r;
@@ -4021,6 +4317,9 @@ float* __fastcall hk_LinkWorld(uint8_t* link, float* out, char flag) {
         if (c && (*(c + 0xb0) & 1) && *(const int*)(c + 0xac) != 1) parent = *(uint8_t**)(c + 0x28);
     }
     if (!parent) return r;
+    if (FpMode() == 1 && DrawnItemLinks()) ItemLinkFix(link, out, parent);  // D-229
+    static const bool gemLinks = config::GetFloat("gem_link_hook", 1.f) > 0.5f;
+    if (!gemLinks) return r;
     int kind = -1;  // 0: a gem joint on Kratos, 1: a joint of the axe object
     const int j = *(const int16_t*)(link + 0xac);
     uint8_t* axObj = g_attached[0].obj.load(std::memory_order_relaxed);
@@ -4352,8 +4651,11 @@ static void GemFixWorlds(uint8_t* hero, float* worlds, int where) {
             g_probeOurs[1].exchange(0), g_probeGame[2].exchange(0), g_probeOurs[2].exchange(0), g_probeGame[3].exchange(0),
             g_probeOurs[3].exchange(0));
 }
+static void PaletteHeadHide(uint8_t* inst);  // D-228 (below ApplyPlan)
 void __fastcall hk_PaletteBuild(uint8_t* inst, void* a2, void* a3, void* a4) {
-    GemPaletteFix(inst);
+    static const bool gem = config::GetFloat("gem_palette_hook", 1.f) > 0.5f;
+    if (gem) GemPaletteFix(inst);
+    PaletteHeadHide(inst);
     o_PaletteBuild(inst, a2, a3, a4);
     stereo::R1SkinPrevious(inst, a2, a3, a4);  // dlss-vr: eye 1's previous pose = eye 0's
 }
@@ -4694,6 +4996,10 @@ struct EditPlan {
     // head goes to the midpoint of these two joints (the neck base 323 and the chest 296) - inside the upper chest, a
     // nonzero distance from every real joint (no zero-length bone), so that skin folds down into the body
     int collapseMidA = -1, collapseMidB = -1;
+    // D-228b: the neck list for Kratos' skinning copy (head_hide_palette): shrunk onto paletteHideTo there, with the head
+    // collapse, instead of in his world cache at draw time (`hide` stays empty then)
+    std::vector<int> paletteHide;
+    int paletteHideTo = -1;
 };
 std::atomic<bool> g_headCollapse{false};
 SRWLOCK g_planLock = SRWLOCK_INIT;
@@ -4705,6 +5011,9 @@ std::atomic<int> g_lastHeroWorld{0};
 std::atomic<unsigned> g_lastHeroThread{0};
 std::atomic<int64_t> g_lastHeroPassQpc{0};
 
+bool HeadHideInDrawing();                 // D-228 (below)
+static void CollapseHead(Mat4* W, int n);  // D-228 (below)
+std::atomic<bool> g_paletteHooked{false};  // the skinning palette hook is in (D-170 / D-228)
 void ApplyPlan(uint8_t* skel) {
     AcquireSRWLockShared(&g_planLock);
     if (skel == g_plan.skel && g_plan.dy != 0.f) {
@@ -4713,30 +5022,90 @@ void ApplyPlan(uint8_t* skel) {
         for (int j : g_plan.subtree) ((Mat4*)(mats + ((size_t)(uint16_t)n + j) * 0x40))->m[3][1] += g_plan.dy;
         ++g_applied;
     }
-    if (skel == g_plan.skel && g_plan.collapseTo >= 0 && !g_plan.collapse.empty()) {
+    if (skel == g_plan.skel && g_plan.collapseTo >= 0 && !g_plan.collapse.empty() && !HeadHideInDrawing()) {
         int16_t n = *(int16_t*)(skel + 0x38);
         uint8_t* mats = *(uint8_t**)(skel + 0x58);
-        Mat4 to = *(const Mat4*)(mats + ((size_t)(uint16_t)n + g_plan.collapseTo) * 0x40);  // copy: collapsed too
-        const int ma = g_plan.collapseMidA, mb = g_plan.collapseMidB;
-        if (ma >= 0 && ma < n && mb >= 0 && mb < n && ma != g_plan.collapseTo && mb != g_plan.collapseTo) {  // D-120
-            const Mat4* A = (const Mat4*)(mats + ((size_t)(uint16_t)n + ma) * 0x40);
-            const Mat4* B = (const Mat4*)(mats + ((size_t)(uint16_t)n + mb) * 0x40);
-            float p[3];
-            for (int c = 0; c < 3; ++c) p[c] = 0.5f * (A->m[3][c] + B->m[3][c]);
-            const float gx = p[0] - A->m[3][0], gy = p[1] - A->m[3][1], gz = p[2] - A->m[3][2];
-            // finite and >= 1 cm from the neck (never a zero-length bone - D-119); else the anchor's own spot as before
-            if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) && gx * gx + gy * gy + gz * gz > 1e-4f)
-                for (int c = 0; c < 3; ++c) to.m[3][c] = p[c];
-        }
-        const float k = 0.001f;  // not exactly zero: keeps skinned normals finite
-        for (int j : g_plan.collapse) {
-            Mat4* m = (Mat4*)(mats + ((size_t)(uint16_t)n + j) * 0x40);
-            for (int r = 0; r < 3; ++r)
-                for (int c = 0; c < 4; ++c) m->m[r][c] = to.m[r][c] * k;
-            m->m[3][0] = to.m[3][0]; m->m[3][1] = to.m[3][1]; m->m[3][2] = to.m[3][2]; m->m[3][3] = 1.f;
+        CollapseHead((Mat4*)(mats + (size_t)(uint16_t)n * 0x40), (uint16_t)n);
+    }
+    ReleaseSRWLockShared(&g_planLock);
+}
+
+// D-228 (owner: "inside a cave I have like an artificial flashlight on my character - in third person it doesn't flicker,
+// in first person it does: sometimes in both eyes, sometimes only the left, sometimes only the right"; "in third person
+// the flashlight follows where you look"; LIVE in the owner's game, 120-frame eye captures while walking: the light went
+// out in whole frames - 6 of 120 with the head hidden, 0 of 40 with "headcollapse off", still 2 of 40 with only the neck
+// shown): the head was hidden by collapsing its 228 joints IN KRATOS' SKELETON (the world cache), which every reader
+// sees - the cave light rides on his head, so whenever it read the collapsed head (shrunk to 0.001, moved into the chest)
+// it went out. Kratos' skinning palette is built from a COPY of his world matrices (D-176, inst + 0x18): the head is now
+// collapsed in that copy only - the drawn mesh has no head, his skeleton keeps the real one for lights, effects and the
+// camera. gowvr.ini head_hide_palette 0 = in the skeleton, as before.
+bool HeadHideInDrawing() {
+    static const bool on = config::GetFloat("head_hide_palette", 1.f) > 0.5f;
+    return on && g_paletteHooked.load(std::memory_order_relaxed);  // (no palette hook: in the skeleton, as before)
+}
+static void PaletteHeadHide(uint8_t* inst) {
+    if (!HeadHideInDrawing() || !inst) return;
+    AcquireSRWLockShared(&g_planLock);
+    uint8_t* skel = g_plan.skel;
+    if (skel && *(uint8_t**)(inst + 0x10) == skel && g_plan.collapseTo >= 0 && !g_plan.collapse.empty()) {
+        if (Mat4* w = *(Mat4**)(inst + 0x18)) {
+            const int n = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+            // a copy shared by several of his meshes is collapsed once (its anchor already shrunk = done)
+            const Mat4& a = w[g_plan.collapseTo < n ? g_plan.collapseTo : 0];
+            const float row = a.m[1][0] * a.m[1][0] + a.m[1][1] * a.m[1][1] + a.m[1][2] * a.m[1][2];
+            if (g_plan.collapseTo < n && row > 0.25f) {
+                // D-228b (owner: "you made it worse - maybe that's a lead"; LIVE: with only the head in the copy, 33 of
+                // 120 frames shadowed - the cave light threw a big shadow from the stretched skin between the still-real
+                // neck and the collapsed head; the neck was shrunk in the world cache at draw time, so whether a palette
+                // got it depended on timing): the neck list is shrunk onto the neck base here too, before the head -
+                // every drawn frame the same hidden head and neck
+                const int to = g_plan.paletteHideTo;
+                if (to >= 0 && to < n && !g_plan.paletteHide.empty()) {
+                    float to3[3];
+                    memcpy(to3, w[to].m[3], sizeof(to3));
+                    for (int j : g_plan.paletteHide) {
+                        if (j < 0 || j >= n) continue;
+                        Mat4& m = w[j];
+                        for (int r = 0; r < 3; ++r)
+                            for (int c = 0; c < 3; ++c) m.m[r][c] *= 0.001f;
+                        m.m[3][0] = to3[0]; m.m[3][1] = to3[1]; m.m[3][2] = to3[2];
+                    }
+                }
+                CollapseHead(w, n);
+                static std::atomic<bool> logged{false};
+                if (!logged.exchange(true))
+                    Log("fp: head hidden in Kratos' drawing only (his skinning copy %p) - his skeleton keeps the real head for "
+                        "lights / effects (D-228, head_hide_palette)", (void*)w);
+            }
         }
     }
     ReleaseSRWLockShared(&g_planLock);
+}
+
+// The head collapse (g_plan, under g_planLock) in an array of world matrices indexed by joint: Kratos' world cache (as
+// before D-228) or his skinning copy
+static void CollapseHead(Mat4* W, int n) {
+    if (g_plan.collapseTo >= n) return;
+    Mat4 to = W[g_plan.collapseTo];  // copy: collapsed too
+    const int ma = g_plan.collapseMidA, mb = g_plan.collapseMidB;
+    if (ma >= 0 && ma < n && mb >= 0 && mb < n && ma != g_plan.collapseTo && mb != g_plan.collapseTo) {  // D-120
+        const Mat4* A = &W[ma];
+        const Mat4* B = &W[mb];
+        float p[3];
+        for (int c = 0; c < 3; ++c) p[c] = 0.5f * (A->m[3][c] + B->m[3][c]);
+        const float gx = p[0] - A->m[3][0], gy = p[1] - A->m[3][1], gz = p[2] - A->m[3][2];
+        // finite and >= 1 cm from the neck (never a zero-length bone - D-119); else the anchor's own spot as before
+        if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) && gx * gx + gy * gy + gz * gz > 1e-4f)
+            for (int c = 0; c < 3; ++c) to.m[3][c] = p[c];
+    }
+    const float k = 0.001f;  // not exactly zero: keeps skinned normals finite
+    for (int j : g_plan.collapse) {
+        if (j < 0 || j >= n) continue;
+        Mat4* m = &W[j];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) m->m[r][c] = to.m[r][c] * k;
+        m->m[3][0] = to.m[3][0]; m->m[3][1] = to.m[3][1]; m->m[3][2] = to.m[3][2]; m->m[3][3] = 1.f;
+    }
 }
 
 // ---- joints published from COMPLETED world passes -------------------------------------------------------------
@@ -5764,6 +6133,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         }
         AcquireSRWLockExclusive(&g_rootLock);
         g_renderRoot[0] = root[12]; g_renderRoot[1] = root[13]; g_renderRoot[2] = root[14];
+        memcpy(&g_renderRootM, root, sizeof(Mat4));  // D-229j
         g_renderRoot[3] = atan2f(root[8], root[10]);
         ReleaseSRWLockExclusive(&g_rootLock);
         if (gemGuard && gemSaveN > 0) {  // D-174
@@ -5782,6 +6152,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         }
     } else {
         float* use = root;
+        bool talismanLeft = false;  // D-229e: a talisman pass left as it is (no rule after the talisman's)
         t_ghostShift[0] = t_ghostShift[1] = 0.f;  // D-095
         t_axeGlued = false;                        // D-130: set only by this pass's back glue
         // D-149: the aiming icon's own UI objects, while head-aiming (third person too - D-103)
@@ -5906,8 +6277,15 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
             const int nj = (int)(uint16_t)*(int16_t*)(skel + 0x38);
             const uint64_t* h0 = nj <= 4 ? *(const uint64_t**)(skel + 0x30) : nullptr;
             Mat4 hd;
-            if (!gl && !attachedObj && (LinkedFix(skel, root, r) || TalismanFix(skel, root, r))) {
-                use = r;  // D-162: an item hung on Kratos (Mimir, the talisman ...) on the drawn joint
+            bool talKept = false;
+            if (!gl && !attachedObj && (LinkedFix(skel, root, r) || TalismanFix(skel, root, r) ||
+                                        (talKept = t_talismanKept))) {
+                if (!talKept) {
+                    use = r;  // D-162: an item hung on Kratos (Mimir, the talisman ...) on the drawn joint
+                    NoteItemCorrection(skel, root, r);  // D-229: reads through it (its light) follow
+                } else {
+                    talismanLeft = true;  // D-229e: the talisman already on the drawn belt - left as it is
+                }
             } else if (!gl && !attachedObj && h0 && !IsBadReadPtr(h0, 8) && h0[0] == 0x65301791f418f62dull && g_flyMove.load() != 0.f) {
                 memcpy(r, root, sizeof(r));  // diagnostic "flymove <m>": are these the stray fire?
                 r[13] += g_flyMove.load();
@@ -5984,6 +6362,8 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
                     for (auto& it : g_carry)
                         if (it.skel == skel) {
                             if (nearBody) it.lastPassFrame = g_frameNo.load();
+                            // (no D-229 correction record here: carried items include the Blades on the back, whose
+                            // flames the D-074 / D-169 rules already move onto the drawn Blades - twice would misplace them)
                             if (GlueCarry(root, it, r)) use = r;
                             break;
                         }
@@ -6002,7 +6382,8 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         // drawn body (a Blades object on our hand, its flames, a glued carried item) - a hand reaching forward in the
         // swing sits next to the lunged game body, so the Blade in it was pulled back by the lunge, into / behind the
         // body. Only an item still at the game's own placement (use == root) is moved now
-        if (use == root && use && fabsf(use[12]) + fabsf(use[13]) + fabsf(use[14]) >= 1.f && CombatHoldWeight() > 0.001f) {
+        if (!talismanLeft && use == root && use && fabsf(use[12]) + fabsf(use[13]) + fabsf(use[14]) >= 1.f &&
+            CombatHoldWeight() > 0.001f) {
             float gx, gz, rx, rz;
             AcquireSRWLockShared(&g_rootLock);
             gx = g_gameRoot[0]; gz = g_gameRoot[2]; rx = g_renderRoot[0]; rz = g_renderRoot[2];
@@ -6359,6 +6740,7 @@ static void DrawCheckSample() {
 
 void EyeProbe(int stage) {
     if (stage == 0) DrawCheckSample();
+    if (stage == 0 || stage == 2) TalismanDrawSample(stage / 2);  // D-229g (right before each eye's kick)
     if (g_eyeProbe.load() <= 0) return;
     uint8_t* s = g_heroSkel.load();
     ProbePt& p = g_probe[stage & 3];
@@ -6552,6 +6934,16 @@ bool NarrativeCarry() {
 }
 void SetHeadCollapsed(bool on) { g_headCollapse = on; }
 
+// D-229: a published hero joint by its index (the joints Kratos' items hang on are published)
+bool PubJointByIndex(int j, Mat4* out) {
+    uint64_t hash = 0;
+    bool found = false;
+    AcquireSRWLockShared(&g_pubCfgLock);
+    for (int i = 0; i < g_pubCfg.n; ++i)
+        if (g_pubCfg.idx[i] == j) { hash = g_pubCfg.hash[i]; found = true; }
+    ReleaseSRWLockShared(&g_pubCfgLock);
+    return found && StableJoint(hash, out);
+}
 bool StableJoint(uint64_t hash, Mat4* out) {
     int k = -1;
     AcquireSRWLockShared(&g_pubCfgLock);
@@ -6655,11 +7047,14 @@ void BodyPostAnim() {
         if (config::GetFloat("fx_hooks", 0.f) > 0.5f || config::GetFloat("fx_attach_hook", 0.f) > 0.5f)
             DetourInstall(kFxAttach, (void*)&hk_FxAttach, (void**)&o_FxAttach);
         DetourInstall(kBoatDockState, (void*)&hk_BoatDock, (void**)&o_BoatDock);
-        if (config::GetFloat("gem_palette_hook", 1.f) > 0.5f)  // D-170: the axe glow's joints in Kratos' GPU palette
-            Log("fp: axe glow joints in the skinning palette hook %s",
-                DetourInstall(kPaletteBuild, (void*)&hk_PaletteBuild, (void**)&o_PaletteBuild) ? "installed" : "FAILED");
-        if (config::GetFloat("gem_link_hook", 1.f) > 0.5f)  // D-165: the axe glow's joints on the drawn axe when READ
-            Log("fp: axe glow joint reads hook %s",
+        // D-170: the axe glow's joints in Kratos' GPU palette; D-228: the hidden head (head_hide_palette)
+        if (config::GetFloat("gem_palette_hook", 1.f) > 0.5f || config::GetFloat("head_hide_palette", 1.f) > 0.5f) {
+            g_paletteHooked = DetourInstall(kPaletteBuild, (void*)&hk_PaletteBuild, (void**)&o_PaletteBuild);
+            Log("fp: skinning palette hook (axe glow joints, hidden head) %s", g_paletteHooked.load() ? "installed" : "FAILED");
+        }
+        // D-165: the axe glow's joints on the drawn axe when READ; D-229: reads through items on Kratos (their lights)
+        if (config::GetFloat("gem_link_hook", 1.f) > 0.5f || config::GetFloat("drawn_item_links", 1.f) > 0.5f)
+            Log("fp: link reads hook (axe glow joints, items on Kratos) %s",
                 DetourInstall(kLinkWorld, (void*)&hk_LinkWorld, (void**)&o_LinkWorld) ? "installed" : "FAILED");
         if (config::GetFloat("gem_set_hook", 1.f) > 0.5f)  // D-164: the axe glow's joints on the drawn axe when written
             Log("fp: axe glow joint writes hook %s",
@@ -6854,6 +7249,9 @@ void BodyPostAnim() {
         if (skel && g_hideBody.load() && FpMode() == 1) {  // F7: gameplay first person only
             p.hide = bodyList;
             p.hideKeep = neckList;
+        } else if (skel && g_headCollapse.load() && neckHide && HeadHideInDrawing()) {  // D-228b: in the skinning copy
+            p.paletteHide = neckList;
+            p.paletteHideTo = FindJointByHash(0xf14d9a553fdad7ccull);
         } else if (skel && g_headCollapse.load() && neckHide) {  // F1 / F3: the neck with the head, onto the neck base
             p.hide = neckList;
             p.hideTo = FindJointByHash(0xf14d9a553fdad7ccull);

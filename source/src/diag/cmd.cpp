@@ -77,7 +77,9 @@ void Dump(uintptr_t a, int n) {
 
 // Commands added after the main chain hit MSVC's nesting limit (C1061): combat / effect switches (D-059..D-062).
 bool ExecuteCombat(const char* verb, const char* a, const char* b, int got) {
-    if (!strcmp(verb, "fastrelease")) {
+    if (!strcmp(verb, "taltrace")) {  // D-229g
+        fp::TalismanTrace(got >= 2 ? atoi(a) : 300);
+    } else if (!strcmp(verb, "fastrelease")) {
         fp::FastRelease(strcmp(a, "off") != 0);
     } else if (!strcmp(verb, "gate")) {  // gate r1|r2 [anim]
         input::GateTest(!strcmp(a, "r2"), got >= 3 && !strcmp(b, "anim"), 40);

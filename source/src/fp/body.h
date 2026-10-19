@@ -136,6 +136,7 @@ void EnsureBlades(bool on); // D-052 A/B
 void CarryGuard(bool on);  // D-052 A/B
 void DrawCheck(const char* mode, const char* tag); // diagnostic: Blades vs hands at each frame's draw
 void EyeProbeStart(int n);// diagnostic: hero wrists at the two eyes' render moments
+void TalismanTrace(int n);  // D-229g diagnostic "taltrace N"
 void EyeProbe(int stage);   // r1.cpp: 0 before kick 1, 1 after kick 1, 2 after between-eyes, 3 after kick 2
 void StanceComp(bool on);                 // D-040: standing body turned so the chest faces the view (A/B)
 void AttJitter(int n);                   // diagnostic: shield / axe placement jitter relative to the IK hand
