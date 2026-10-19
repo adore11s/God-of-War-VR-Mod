@@ -576,6 +576,8 @@ void Execute(const std::string& line) {
         stereo::R1BankLoad();
     } else if (!strcmp(verb, "r1diff")) {
         stereo::R1Diff(got >= 2 ? atoi(a) : 1);
+    } else if (!strcmp(verb, "r1fid")) {
+        stereo::R1FrameIdLog(got >= 2 ? atoi(a) : 6);
     } else if (!strcmp(verb, "r1double")) {
         stereo::R1Double(got >= 2 ? atoi(a) : 1, got >= 3 ? (unsigned)strtoul(b, nullptr, 16) : 0x1ff);
     } else if (!strcmp(verb, "packets")) {

@@ -56,6 +56,7 @@ using PFN_Particle = void(__fastcall*)(uint64_t, uint64_t, uint64_t, uint64_t);
 PFN_Particle o_Particle = nullptr;
 std::atomic<bool> g_skipParticles{false};
 std::atomic<uint64_t> g_particleSkips{0};
+std::atomic<uint64_t> g_particleCalls{0};  // (r1fid diagnostic)
 
 template <class T> T& G(uint64_t va);
 template <class F> F Fn(uint64_t va);
@@ -77,6 +78,7 @@ void ListsLock(volatile long* l) { while (_InterlockedCompareExchange(l, 1, 0) !
 void ListsUnlock(volatile long* l) { _InterlockedCompareExchange(l, 0, 1); }
 
 void __fastcall hk_Particle(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+    ++g_particleCalls;
     if (g_skipParticles.load()) {
         ++g_particleSkips;
         return;
@@ -219,6 +221,12 @@ std::atomic<uint64_t> g_skinGiven{0};
 // kick drains between the eyes, kick 2's after it) - 0 from kick 1's start, 1 from kick 2's until the next frame's
 // kick 1, -1 single kicks; the frame steps at kick 1's start
 std::atomic<int> g_skinEye{-1};
+// diagnostic "r1fid N": the game's frame id 0x141227b04 (per-frame dither / noise / ring index) and the particle job's
+// calls at the start of each kick, N double frames
+constexpr uint64_t kFrameIdVa = 0x141227b04;
+std::atomic<int> g_fidLog{0};
+uint32_t g_fid0 = 0;
+uint64_t g_pc0 = 0;
 std::atomic<uint64_t> g_skinFrame{0};
 
 template <class T> T& G(uint64_t va) { return *(T*)((uint8_t*)GameVa(va)); }
@@ -326,6 +334,10 @@ void BetweenEyes(unsigned m) {
     if (m & 0x4000) {
         g_savedDt = G<float>(0x144fadce0);
         G<float>(0x144fadce0) = 0.f;
+        // Owner 2026-10-19 (Quest flicker): the time-step array has more slots - [0] 0.000, [1] [2] [3] = the frame's
+        // 0.016 s - and only [0] is frozen. LIVE zero-eye-distance test with [1..3] frozen as well: the eyes' particles /
+        // wind-blown plants still differed as much (input 4.9-5.1 % vs 5.8-6.1 % of pixels over 1 %) - not the cause,
+        // reverted. (Also ruled out: the frame id 0x141227b04 - equal in both kicks -, the shader time 0x14123b764 - banked.)
     }
     // Engine's own render-frame begin (sub_14046c8e0: per-object render-prep batches 7320/7318/7368/7350 and the
     // batch executor via sub_14050e140) so the second kick's registered batches get executed.
@@ -518,6 +530,7 @@ void __fastcall hk_Kick() {
         if (bank) BankCapture();
         ++g_skinFrame;
         g_skinEye = 0;
+        if (g_fidLog.load() > 0) { g_fid0 = G<uint32_t>(kFrameIdVa); g_pc0 = g_particleCalls.load(); }
         bool headOn = false;
         if (g_vr.load()) {
             vr::EyeViews used;
@@ -556,6 +569,11 @@ void __fastcall hk_Kick() {
         // (dt was set to 0 inside BetweenEyes, after kick 1 drained and before render-begin; see g_savedDt)
         const bool freezeDt = (g_mask.load() & 0x4000) != 0;
         g_skinEye = 1;
+        if (g_fidLog.load() > 0) {
+            g_fidLog.fetch_sub(1);
+            Log("r1fid: frame id at kick 1 %u, at kick 2 %u | particle job calls during kick 1 + between: %llu", g_fid0,
+                G<uint32_t>(kFrameIdVa), (unsigned long long)(g_particleCalls.load() - g_pc0));
+        }
         if (headOn) SetEyeIndex(1);
         else if (g_eyesOn) { SetEyeIndex(1); SetEyeCamera(true, g_eyeOff[1] + wob, g_eyeYawDeg[1]); }
         // Sync point (0x20000): kick 2 rewrites the effects job's 3-slot CPU blocks (0x1422b2c00 + slot*0x55c0) that the
@@ -592,7 +610,9 @@ void __fastcall hk_Kick() {
         else if (g_eyesOn) SetEyeCamera(false, 0.f, 0.f);
         // Waiting for kick 2's asynchronous work before the frame tail self-deadlocks (the execution job's dependencies
         // are only released by the tail itself — F-006), so dt is restored as soon as the synchronous kick returns.
-        if (freezeDt) G<float>(0x144fadce0) = g_savedDt;
+        if (freezeDt) {
+            G<float>(0x144fadce0) = g_savedDt;
+        }
         if (snap) { Snap("after-k2"); --g_snap; }
         uint64_t k = ++g_doubled;
         if (k <= 5 || k % 1000 == 0) {
@@ -752,6 +772,8 @@ void R1Diff(int mode) {
     g_diffMode = mode;
     Log("r1diff: armed mode %d (%s)", mode, mode == 1 ? "double-kick" : "control frame");
 }
+
+void R1FrameIdLog(int frames) { g_fidLog = frames; Log("r1fid: next %d double frames", frames); }
 
 void R1Double(int frames, unsigned mask) {
     g_mask = mask;

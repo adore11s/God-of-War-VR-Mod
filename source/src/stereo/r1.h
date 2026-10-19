@@ -9,6 +9,7 @@ bool R1Install();
 void R1Observe(int frames);
 // Zero-delta double kick for n frames; mask selects between-eyes drain/reset steps (see r1.cpp BetweenEyes).
 void R1Double(int frames, unsigned mask);
+void R1FrameIdLog(int frames);  // diagnostic "r1fid N"
 // One-shot .data diff: mode 1 = across kick 1 + between-eyes (next double kick), mode 2 = across one normal frame.
 void R1Diff(int mode);
 // Load gowvr_logs/r1bank.txt (per-eye state bank; used when the double-kick mask has bit 0x2000).

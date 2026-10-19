@@ -719,9 +719,22 @@ V vs(uint id : SV_VertexID) {
     return o;
 }
 float3 lin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
-float4 ps(V i) : SV_Target { return float4(lin(saturate(src.Sample(smp, i.uv).rgb)), 1); }
+// DITHER (owner 2026-10-19, Quest: "random godrays flicker"): the game's 10-bit picture goes into an 8-bit sRGB headset
+// image; without dithering dark gradients (fog, god rays) band, and a Quest's video stream turns moving bands into
+// flicker. A fixed per-pixel pattern (interleaved gradient noise, not changing over time) of +-0.5 of an 8-bit step,
+// added in sRGB before the hardware re-encodes, breaks the bands up.
+float3 dither(float3 s, float2 p) {
+#ifdef DITHER
+    const float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+    s = saturate(s + (n - 0.5) / 255.0);
+#endif
+    return s;
+}
+float4 ps(V i) : SV_Target { return float4(lin(dither(saturate(src.Sample(smp, i.uv).rgb), i.pos.xy)), 1); }
 cbuffer Crop : register(b0) { float4 srcRect; };  // u0 v0 width height of the part of src to copy
-float4 ps_crop(V i) : SV_Target { return float4(lin(saturate(src.Sample(smp, srcRect.xy + i.uv * srcRect.zw).rgb)), 1); }
+float4 ps_crop(V i) : SV_Target {
+    return float4(lin(dither(saturate(src.Sample(smp, srcRect.xy + i.uv * srcRect.zw).rgb), i.pos.xy)), 1);
+}
 float4 ps_hud(V i) : SV_Target {
     float4 c = src.Sample(smp, i.uv);
     float a = saturate(c.a);
@@ -738,8 +751,14 @@ bool CreateBlit() {
     auto compile = c ? (PFN_Compile)GetProcAddress(c, "D3DCompile") : nullptr;
     if (!compile) { Log("xr: d3dcompiler_47 unavailable"); return false; }
     ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
+    // the eye / screen blits dither into an 8-bit sRGB headset image (gowvr.ini xr_dither, default 1)
+    const bool eightBit = g_format == (int64_t)DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || g_format == (int64_t)DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    const bool dither = eightBit && config::GetFloat("xr_dither", 1.f) > 0.5f;
+    static const D3D_SHADER_MACRO kDither[] = {{"DITHER", "1"}, {nullptr, nullptr}};
+    const void* defs = dither ? (const void*)kDither : nullptr;
+    Log("xr: eye images %s (headset format %lld)", dither ? "dithered to 8 bits (xr_dither 1)" : "not dithered", g_format);
     if (FAILED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vsb, &err)) ||
-        FAILED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "ps", "ps_5_0", 0, 0, &psb, &err))) {
+        FAILED(compile(kShader, sizeof(kShader) - 1, "blit", defs, nullptr, "ps", "ps_5_0", 0, 0, &psb, &err))) {
         Log("xr: blit shader compile failed: %s", err ? (const char*)err->GetBufferPointer() : "?");
         return false;
     }
@@ -754,7 +773,7 @@ bool CreateBlit() {
     }
     if (!g_psHud) Log("xr: HUD layer shader unavailable - the HUD is pasted into the eye images");
     ID3DBlob* cb = nullptr;
-    if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "ps_crop", "ps_5_0", 0, 0, &cb, &err))) {
+    if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", defs, nullptr, "ps_crop", "ps_5_0", 0, 0, &cb, &err))) {
         if (FAILED(g_dev->CreatePixelShader(cb->GetBufferPointer(), cb->GetBufferSize(), nullptr, &g_psCrop))) g_psCrop = nullptr;
         cb->Release();
     }
@@ -1403,6 +1422,26 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         config::GetFloat("wristyaw_quest", 0.f), config::GetFloat("wristroll_quest", 0.f),
         config::GetFloat("wristpitch_other", 0.f), config::GetFloat("wristyaw_other", 0.f),
         config::GetFloat("wristroll_other", 0.f));
+    {   // owner 2026-10-19: "we're doing a lot of fixes that might break something - the log must show what was on":
+        // every recent fix's gowvr.ini switch, its value and whether it is active here (0 turns each one off)
+        const int crop = (int)config::GetFloat("crop_to_eye_fov", 2.f);
+        const bool cropActive = crop == 1 || (crop == 2 && !strstr(g_runtimeName, "SteamVR"));
+#ifdef GOWVR_OPENXR_LOADER
+        const char* loader = config::GetFloat("xr_loader", 1.f) > 0.5f ? "official loader" : "runtime loaded directly";
+#else
+        const char* loader = "runtime loaded directly (no loader in this build)";
+#endif
+        Log("summary: fixes (gowvr.ini key = value, 0 = off): xr_loader = %.0f (%s) | crop_to_eye_fov = %d (%s) | "
+            "xr_dither = %.0f | eye_history_fix = %.0f | skin_per_frame = %.0f | jitter_per_frame = %.0f | dlss_per_eye = %.0f | "
+            "dlss_vr_phases = %.0f | dlss_vr_sharpness = %.2f | mv_health = %.0f | render_size_auto = %.0f | ui_reticle_mode = %.0f | "
+            "finisher_third_person = %.0f | hud_layer = %.0f | sharp_ui = %.0f",
+            config::GetFloat("xr_loader", 1.f), loader, crop, cropActive ? "active" : "not on this runtime",
+            config::GetFloat("xr_dither", 1.f), config::GetFloat("eye_history_fix", 1.f), config::GetFloat("skin_per_frame", 1.f),
+            config::GetFloat("jitter_per_frame", 1.f), config::GetFloat("dlss_per_eye", 1.f),
+            config::GetFloat("dlss_vr_phases", 0.f), config::GetFloat("dlss_vr_sharpness", 0.f), config::GetFloat("mv_health", 1.f),
+            config::GetFloat("render_size_auto", 1.f), config::GetFloat("ui_reticle_mode", 2.f),
+            config::GetFloat("finisher_third_person", 0.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f));
+    }
     Log("summary: pad_mode %.0f, autovr %.0f, dlss_per_eye %.0f, hit_radius %.2f, hit_radius_fist %.2f",
         config::GetFloat("pad_mode", 0.f), config::GetFloat("autovr", 1.f), config::GetFloat("dlss_per_eye", 1.f),
         config::GetFloat("hit_radius", 1.0f), config::GetFloat("hit_radius_fist", 0.5f));

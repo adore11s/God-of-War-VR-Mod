@@ -359,6 +359,120 @@ void MvHealthTick(ID3D11DeviceContext* ctx, const NgxParams* p, int eye) {
     t->Release();
 }
 
+// Diagnostic "dlssfind 1" (owner 2026-10-19, zero eye distance test: the eyes differed on particles / wind-blown grass):
+// the DLSS input (Color, the game's own render) and output of BOTH eyes in one frame, compared pixel by pixel - input
+// already different = the game draws them at different moments per eye (the double render); input equal, output
+// different = the two DLSS instances. Writes shots/dlsscmp_<in|out>_eye0/1.png and _diff.png.
+struct ColorCap { std::vector<float> rgb; unsigned w = 0, h = 0; uint64_t frame = 0; bool have = false; };
+ColorCap g_cap[2][2];  // [input/output][eye]
+ColorCap g_prevEye0;   // "dlssfind 2": eye 0's input one frame before
+std::atomic<int> g_cmpArm{0};
+float F11(uint32_t v, int mbits) {  // unsigned small float (R11G11B10): 5-bit exponent, mbits mantissa
+    const uint32_t e = (v >> mbits) & 31, m = v & ((1u << mbits) - 1);
+    if (e == 0) return ldexpf((float)m, -14 - mbits);
+    if (e == 31) return 65504.f;
+    return ldexpf(1.f + (float)m / (float)(1u << mbits), (int)e - 15);
+}
+bool ReadColor(ID3D11DeviceContext* ctx, ID3D11Resource* r, unsigned subW, unsigned subH, ColorCap& out) {
+    ID3D11Texture2D* t = nullptr;
+    if (!r || FAILED(r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) || !t) return false;
+    D3D11_TEXTURE2D_DESC d{};
+    t->GetDesc(&d);
+    D3D11_TEXTURE2D_DESC sd = d;
+    sd.Usage = D3D11_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ; sd.MiscFlags = 0;
+    sd.MipLevels = sd.ArraySize = 1; sd.SampleDesc = {1, 0};
+    ID3D11Device* dev = nullptr;
+    ctx->GetDevice(&dev);
+    ID3D11Texture2D* st = nullptr;
+    bool ok = false;
+    if (dev && SUCCEEDED(dev->CreateTexture2D(&sd, nullptr, &st)) && st) {
+        ctx->CopySubresourceRegion(st, 0, 0, 0, 0, t, 0, nullptr);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (SUCCEEDED(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m))) {
+            const unsigned w = subW && subW <= d.Width ? subW : d.Width, h = subH && subH <= d.Height ? subH : d.Height;
+            out.rgb.resize((size_t)w * h * 3);
+            out.w = w; out.h = h;
+            ok = true;
+            for (unsigned y = 0; y < h && ok; ++y) {
+                const uint8_t* row = (const uint8_t*)m.pData + (size_t)y * m.RowPitch;
+                for (unsigned x = 0; x < w; ++x) {
+                    float* o = &out.rgb[((size_t)y * w + x) * 3];
+                    switch (d.Format) {
+                        case DXGI_FORMAT_R16G16B16A16_FLOAT: {
+                            const uint16_t* q = (const uint16_t*)row + x * 4;
+                            o[0] = Half(q[0]); o[1] = Half(q[1]); o[2] = Half(q[2]);
+                            break;
+                        }
+                        case DXGI_FORMAT_R11G11B10_FLOAT: {
+                            const uint32_t v = ((const uint32_t*)row)[x];
+                            o[0] = F11(v & 0x7ff, 6); o[1] = F11((v >> 11) & 0x7ff, 6); o[2] = F11(v >> 22, 5);
+                            break;
+                        }
+                        case DXGI_FORMAT_R10G10B10A2_UNORM: {
+                            const uint32_t v = ((const uint32_t*)row)[x];
+                            o[0] = (v & 1023) / 1023.f; o[1] = ((v >> 10) & 1023) / 1023.f; o[2] = ((v >> 20) & 1023) / 1023.f;
+                            break;
+                        }
+                        case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+                        case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: {
+                            const uint8_t* q = row + x * 4;
+                            const bool bgr = d.Format == DXGI_FORMAT_B8G8R8A8_UNORM || d.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+                            o[0] = q[bgr ? 2 : 0] / 255.f; o[1] = q[1] / 255.f; o[2] = q[bgr ? 0 : 2] / 255.f;
+                            break;
+                        }
+                        default: ok = false; break;
+                    }
+                    if (!ok) break;
+                }
+            }
+            if (!ok) Log("dlsscmp: format %d not read", (int)d.Format);
+            ctx->Unmap(st, 0);
+        }
+        st->Release();
+    }
+    if (dev) dev->Release();
+    t->Release();
+    return ok;
+}
+uint8_t Tone(float v) { v = v < 0.f ? 0.f : v; v = v / (1.f + v); return (uint8_t)lroundf(255.f * sqrtf(v)); }
+void CompareCaps(int which) {  // which: 0 input, 1 output
+    ColorCap& a = g_cap[which][0];
+    ColorCap& b = g_cap[which][1];
+    if (!a.have || !b.have || a.w != b.w || a.h != b.h) return;
+    const char* nm = which ? "out" : "in";
+    std::vector<uint32_t> pa((size_t)a.w * a.h), pb(pa.size()), pd(pa.size());
+    size_t diff1 = 0, diff5 = 0;
+    double sum = 0;
+    for (size_t i = 0; i < pa.size(); ++i) {
+        const float* x = &a.rgb[i * 3];
+        const float* y = &b.rgb[i * 3];
+        float md = 0.f;
+        for (int c = 0; c < 3; ++c) {
+            const float rel = fabsf(x[c] - y[c]) / (0.05f + fmaxf(x[c], y[c]));
+            md = fmaxf(md, rel);
+        }
+        sum += md;
+        if (md > 0.01f) ++diff1;
+        if (md > 0.05f) ++diff5;
+        pa[i] = Tone(x[0]) | Tone(x[1]) << 8 | Tone(x[2]) << 16 | 0xff000000u;
+        pb[i] = Tone(y[0]) | Tone(y[1]) << 8 | Tone(y[2]) << 16 | 0xff000000u;
+        const uint8_t g = (uint8_t)(Tone(x[1]) * 0.35f);
+        const uint8_t r = (uint8_t)fminf(255.f, md * 1500.f);
+        pd[i] = (uint32_t)(r > g ? r : g) | (uint32_t)g << 8 | (uint32_t)g << 16 | 0xff000000u;
+    }
+    Log("dlsscmp: DLSS %s eye 0 vs eye 1 (frame %llu / %llu, %ux%u): mean relative difference %.4f, %.2f %% of pixels "
+        "over 1 %%, %.2f %% over 5 %%", which ? "OUTPUT" : "INPUT (the game's render)", (unsigned long long)a.frame,
+        (unsigned long long)b.frame, a.w, a.h, sum / pa.size(), 100.0 * diff1 / pa.size(), 100.0 * diff5 / pa.size());
+    char n0[48], n1[48], nd[48];
+    sprintf_s(n0, "dlsscmp_%s_eye0", nm);
+    sprintf_s(n1, "dlsscmp_%s_eye1", nm);
+    sprintf_s(nd, "dlsscmp_%s_diff", nm);
+    diag::WritePng(n0, (const uint8_t*)pa.data(), a.w, a.h, a.w * 4, (int)DXGI_FORMAT_R8G8B8A8_UNORM, 1);
+    diag::WritePng(n1, (const uint8_t*)pb.data(), a.w, a.h, a.w * 4, (int)DXGI_FORMAT_R8G8B8A8_UNORM, 1);
+    diag::WritePng(nd, (const uint8_t*)pd.data(), a.w, a.h, a.w * 4, (int)DXGI_FORMAT_R8G8B8A8_UNORM, 1);
+    a.have = b.have = false;
+}
+
 std::atomic<int> g_logEvals{0};    // dlsslog N
 std::atomic<int> g_logBuilds{0};   // RenderView builds logged alongside
 std::atomic<uint64_t> g_resets[3];  // evaluations with Reset set: eye 0, eye 1, flat
@@ -463,7 +577,67 @@ NgxResult __cdecl hk_Eval(ID3D11DeviceContext* ctx, const void* handle, const vo
                     (unsigned long long)g_resets[2].load());
         }
     }
-    return o_Eval(ctx, h, params, cb);
+    // "dlssfind 2": eye 0's DLSS input one frame earlier as well (does eye 1 show eye 0's moment or the previous one?)
+    if (params && eye == 0 && g_cmpArm.load() == 3) {
+        NgxParams* p3 = (NgxParams*)const_cast<void*>(params);
+        ID3D11Resource* c = nullptr;
+        if (p3->Get("Color", &c) == kNgxOk && c)
+            g_prevEye0.have = ReadColor(ctx, c, GetU(p3, "DLSS.Render.Subrect.Dimensions.Width", 0),
+                                         GetU(p3, "DLSS.Render.Subrect.Dimensions.Height", 0), g_prevEye0);
+        g_prevEye0.frame = g_frame.load();
+        g_cmpArm = 1;  // the next frame: eye 0 and eye 1 as "dlssfind 1"
+        return o_Eval(ctx, h, params, cb);
+    }
+    // "dlssfind 1": eye 0 then eye 1 of one frame, the DLSS input before and the output after the evaluation
+    const int arm = g_cmpArm.load();
+    const bool cap = params && ((arm == 1 && eye == 0) || (arm == 2 && eye == 1));
+    NgxParams* pp = (NgxParams*)const_cast<void*>(params);
+    if (cap) {
+        ID3D11Resource* c = nullptr;
+        if (pp->Get("Color", &c) == kNgxOk && c)
+            g_cap[0][eye].have = ReadColor(ctx, c, GetU(pp, "DLSS.Render.Subrect.Dimensions.Width", 0),
+                                           GetU(pp, "DLSS.Render.Subrect.Dimensions.Height", 0), g_cap[0][eye]);
+        g_cap[0][eye].frame = g_frame.load();
+    }
+    const NgxResult res = o_Eval(ctx, h, params, cb);
+    if (cap) {
+        ID3D11Resource* o = nullptr;
+        if (pp->Get("Output", &o) == kNgxOk && o) g_cap[1][eye].have = ReadColor(ctx, o, 0, 0, g_cap[1][eye]);
+        g_cap[1][eye].frame = g_frame.load();
+        if (eye == 0) {
+            g_cmpArm = 2;
+        } else {
+            if (g_prevEye0.have && g_cap[0][1].have && g_prevEye0.w == g_cap[0][1].w && g_prevEye0.h == g_cap[0][1].h) {
+                // eye 1 now vs eye 0 one frame earlier, BEFORE CompareCaps clears the captures
+                const ColorCap& a = g_prevEye0;
+                const ColorCap& b = g_cap[0][1];
+                const ColorCap& c = g_cap[0][0];
+                size_t prevCloser = 0, nowCloser = 0, moving = 0;
+                for (size_t i = 0; i < (size_t)a.w * a.h; ++i) {
+                    float dPrev = 0.f, dNow = 0.f, dEye0 = 0.f;
+                    for (int k = 0; k < 3; ++k) {
+                        const size_t j = i * 3 + k;
+                        dPrev = fmaxf(dPrev, fabsf(b.rgb[j] - a.rgb[j]) / (0.05f + fmaxf(b.rgb[j], a.rgb[j])));
+                        dNow = fmaxf(dNow, fabsf(b.rgb[j] - c.rgb[j]) / (0.05f + fmaxf(b.rgb[j], c.rgb[j])));
+                        dEye0 = fmaxf(dEye0, fabsf(c.rgb[j] - a.rgb[j]) / (0.05f + fmaxf(c.rgb[j], a.rgb[j])));
+                    }
+                    if (dEye0 < 0.05f) continue;  // only pixels that changed in eye 0 from one frame to the next
+                    ++moving;
+                    if (dPrev + 0.01f < dNow) ++prevCloser;
+                    else if (dNow + 0.01f < dPrev) ++nowCloser;
+                }
+                Log("dlsscmp: of %zu pixels that changed in eye 0 between frames %llu and %llu, eye 1 matches eye 0's "
+                    "PREVIOUS frame better at %.1f %%, its CURRENT frame better at %.1f %%", moving,
+                    (unsigned long long)a.frame, (unsigned long long)c.frame, moving ? 100.0 * prevCloser / moving : 0.0,
+                    moving ? 100.0 * nowCloser / moving : 0.0);
+                g_prevEye0.have = false;
+            }
+            CompareCaps(0);
+            CompareCaps(1);
+            g_cmpArm = 0;
+        }
+    }
+    return res;
 }
 
 NgxResult __cdecl hk_Release(void* handle) {
@@ -538,6 +712,16 @@ void DlssLog(int evals) {
 }
 
 void DlssFind(int evals) {
+    if (evals == 2) {  // "dlssfind 2": + eye 0 one frame earlier
+        g_cmpArm = 3;
+        Log("dlsscmp: eye 0 now, then both eyes in the next frame");
+        return;
+    }
+    if (evals == 1) {  // "dlssfind 1": both eyes' DLSS input and output of one frame, compared
+        g_cmpArm = 1;
+        Log("dlsscmp: comparing both eyes' DLSS input and output at the next frame");
+        return;
+    }
     if (evals == 0) {  // "dlssfind 0": capture the motion vectors (the 3rd evaluation of each eye from now)
         for (auto& c : g_mvCaps) c = 3;
         Log("dlssmv: capturing the motion vectors of each eye");

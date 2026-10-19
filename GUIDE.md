@@ -128,6 +128,8 @@ Most useful settings:
 | `walls_f1` | 1 | 0 = no wall collision in first person |
 | `finisher_third_person` | 0 | 1 = finishers play in third person (the game's own camera) instead of first person |
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
+| `xr_loader` | 1 | 0 = start the VR runtime directly instead of through the official OpenXR loader (only if VR stopped starting) |
+| `xr_dither` | 1 | 0 = no dithering of the picture into the headset (dark gradients may band) |
 | `crop_to_eye_fov` | 2 | Sends each eye's picture in exactly the shape the headset asks for (fixes doubled near objects on Quest Link). 2 = on every runtime except SteamVR, 1 = always, 0 = never |
 
 ---
