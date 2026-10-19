@@ -31,8 +31,8 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
   - **Shield:** press the left grip to defend yourself.
   - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
   - **Blades of Chaos:** light attacks (more attacks are on the way). Equip them by reaching over your left shoulder with either hand.
-- **Finger curling.** Hover your fingers over the grip buttons and Kratos' fingers curl.
-- **8D audio** in first person: sounds follow your head.
+- **Finger detection.** Hover your fingers over the grip buttons and Kratos' fingers curl.
+- **3D audio** in first person: sounds follow your head.
 - **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
 - **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (set in the VR settings panel).
 - **Smooth or snap turning** in first person, set in the VR settings panel.
