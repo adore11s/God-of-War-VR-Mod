@@ -8,11 +8,11 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 
 - **Only playing in third person?** Skip the first-person points below. Your controllers work like a gamepad.
 - **Game settings:** no need to change them. The installer does it.
-- **First person shortcut:** with your right hand next to your head, press **○ (PS VR2) / B (Meta Quest, Index)** - while walking it switches first person while walking, during a cutscene first person in cutscenes. The game starts with first person while walking on and in cutscenes off; both are also in the VR settings panel.
+- **First person on / off:** hold your right hand next to your head and press **○ (PS VR2) / B (Meta Quest, Index)**. Press it while walking to switch first person for gameplay, or during a cutscene to switch it for cutscenes. By default it is on for gameplay and off for cutscenes. You can also change both in the VR settings panel.
 - **Tested:** only the first 2 hours of the game. Later parts may break or crash.
 - **No button prompt, or the body glitches out?** The fastest fix: switch to third person and then back to first person (**○ / B next to your head** twice).
 - **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too. In menus the sticks also work as the arrow buttons (D-pad).
-- **Health and Spartan Rage bars in first person:** hidden, even in fights. Hold your **left hand next to or over your head** (grip released) to see them, bigger and nearer the middle. Third person shows them as your game settings say.
+- **Health and Spartan Rage bars in first person:** hidden, even in fights. Hold your **left hand next to your head** to see them.
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
 - **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
