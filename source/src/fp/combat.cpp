@@ -368,7 +368,7 @@ uint32_t __fastcall hk_VolTest(int64_t volA, int64_t volB, int64_t A, int64_t B,
     float* s = nullptr;
     const bool heroA = FpMode() == 1 && g_on.load() && IsHeroEntry(A);
     if (heroA) g_heroVolAt = GetTickCount64();  // D-151
-    if (R0 > 0.f && heroA && volA && !IsBadReadPtr((void*)(volA + 0x88), 8)) {
+    if (R0 > 0.f && heroA && MotionControls() && volA && !IsBadReadPtr((void*)(volA + 0x88), 8)) {  // D-244: no boost without
         s = *(float**)(volA + 0x88);
         if (s && IsBadReadPtr(s, 0x30 * 4)) s = nullptr;
     }
@@ -710,7 +710,20 @@ bool HitMoveName(const char* a) {
         if (_strnicmp(a, k, strlen(k)) == 0) return true;
     return false;
 }
+// D-244 (owner: "add a VR menu setting Motion Controls On / Off, On by default - nothing else should change: the body
+// stays frozen when getting hit, but with motion controls off the speed-up is off and the attack animations play
+// normally"): refreshed every frame from gowvr.ini motion_controls (the panel writes it)
+std::atomic<bool> g_motionCtl{true};  // (MotionControls() below, outside this namespace)
+
+Policy ClassifyMotion(const char* anim, bool sync);
+// With motion controls off a HELD attack / evade / post-attack stance plays its animation (ANIMATE, as the runic attacks
+// and the kick already do in F1); hit reactions stay held (frozen body)
 Policy Classify(const char* anim, bool sync) {
+    const Policy p = ClassifyMotion(anim, sync);
+    if (p == Policy::Hold && !MotionControls() && !HitMoveName(anim)) return Policy::Animate;
+    return p;
+}
+Policy ClassifyMotion(const char* anim, bool sync) {
     if (HitMoveName(anim)) return Policy::Hold;  // D-232 / D-233 (sync moves too: Baldur's hits)
     if (sync) return Policy::Animate;
     if (!anim || !anim[0]) return Policy::None;
@@ -927,6 +940,53 @@ bool CombatRageReady() {
     if (!CombatRageMeter(&v, &m)) return false;
     return m > 0.f && v >= m - fmaxf(0.001f, m * 0.001f);
 }
+// D-267: Kratos' health as a share of its max (hero meter "Health", read like "Blood"), for the low-health ring of the
+// HUD layer (xr.cpp). Read on the game thread (CombatTick) every 100 ms; -1 = not read
+std::atomic<float> g_healthFrac{-1.f};
+float CombatHealthFraction() { return g_healthFrac.load(); }
+static void HealthTick(ULONGLONG now) {
+    static ULONGLONG last = 0;
+    if (now - last < 100) return;
+    last = now;
+    static const uint64_t kHealth = MeterNameHash("Health");
+    static const PFN_MeterMax meterMax = (PFN_MeterMax)((uint8_t*)GameVa(0x1407c3850ull));
+    uint8_t* obj = HeroObject();
+    uint8_t* cr = obj && !IsBadReadPtr(obj + 0x220, 8) ? *(uint8_t**)(obj + 0x220) : nullptr;
+    float v = 0.f, m = 0.f;
+    const bool ok = cr && !IsBadReadPtr(cr, 0x3a60) && *(int32_t*)(cr + 0x14) == 2 && ReadHeroMeter(cr, kHealth, meterMax, &v, &m) &&
+                    v == v && m == m && m > 0.f;
+    // D-270 (owner, D-269 build: "it only activates below 2 percent, not below 10 %"; owner log: "vignette on" only at 2 %
+    // and 0 %): the meter's max (sub_1407c3850, read once as 100 / 100 before the save loaded) is the BASE health - the
+    // value goes above it with the armour's vitality, and v / max was clamped at 100 %: at the bar's 10 % the share read
+    // well above 10 %. The max is now the larger of the meter's max and the highest value seen, which starts again after
+    // a death (health 0; the respawn's full health sets it)
+    static float peak = 0.f;
+    if (ok) {
+        if (v <= 0.f) peak = 0.f;
+        else if (v > peak) peak = v;
+        static bool aboveLogged = false;
+        if (v > m * 1.01f && !aboveLogged) {
+            aboveLogged = true;
+            Log("combat: health %.0f above the meter's max %.0f - the highest health seen is the max (D-270)", v, m);
+        }
+    }
+    const float effMax = fmaxf(m, peak);
+    const float f = ok ? fminf(fmaxf(v / effMax, 0.f), 1.f) : -1.f;
+    const float was = g_healthFrac.exchange(f);
+    static int logs = 0;
+    if ((was < 0.f) != (f < 0.f) && logs++ < 6) {
+        if (ok) Log("combat: health meter read - %.0f / %.0f (D-267)", v, m);
+        else Log("combat: health meter not read (D-267)");
+    }
+    {   // D-270 evidence: each 10 % step of the share logged (value, meter max, highest seen)
+        static int lastStep = -1;
+        const int step = ok ? (int)(f * 10.f + 0.5f) : -1;
+        static int stepLogs = 0;
+        if (step != lastStep && ok && stepLogs++ < 200)
+            Log("combat: health %.0f %% (%.1f; meter max %.1f, highest seen %.1f)", f * 100.f, v, m, peak);
+        lastStep = step;
+    }
+}
 bool CombatBladesFree() { return g_bladesFree.load(); }
 bool CombatInStance() { return g_inStance.load(); }
 static std::atomic<bool> g_heroIdle{false};
@@ -1021,6 +1081,7 @@ void CombatNudgeAmount(float a) { g_nudgeAmt = a; Log("combat: recovery nudge %.
 void CombatAttackHold(bool on) { g_attackHold = on; Log("combat: attack position hold (no lunge) %s", on ? "ON" : "OFF"); }
 bool CombatSprinting() { return g_sprinting.load(); }
 bool CombatBusy() { return g_busy.load(); }
+bool MotionControls() { return g_motionCtl.load(); }  // D-244
 ULONGLONG CombatIdleMs() {
     const ULONGLONG t = g_idleSince.load();
     if (g_busy.load()) return 0;
@@ -1251,6 +1312,10 @@ bool ContextPlainButtons() { return g_ctxButtons.load(); }
 bool ContextThrowable() { return g_ctxThrowable.load(); }
 
 void CombatTick() {
+    {  // D-244
+        const bool m = config::GetFloat("motion_controls", 1.f) > 0.5f;
+        if (g_motionCtl.exchange(m) != m) Log("combat: motion controls %s (D-244)", m ? "ON" : "OFF - controllers as a gamepad, attacks animated");
+    }
     static bool cfg = false;
     if (!cfg) { cfg = true; g_on = config::GetFloat("combat_f1", 1.f) > 0.5f; }
     InstallHitLog();
@@ -1264,6 +1329,7 @@ void CombatTick() {
     if (dt <= 0.f || dt > 0.1f) dt = 1.f / 90.f;
     last = nowq;
     const ULONGLONG now = GetTickCount64();
+    HealthTick(now);  // D-267
 
     const bool f1 = g_on.load() && FpMode() == 1;
     const char* anim = ActiveMoveAnim();
@@ -1296,11 +1362,26 @@ void CombatTick() {
         if (prim[0] && strcmp(prim, lastPrim) != 0) {
             strcpy_s(lastPrim, prim);
             const bool was = g_inRage.load();
-            if (ContainsI(prim, "rage")) g_inRage = !ContainsI(prim, "rageexit");
-            else if (StartsWithI(prim, "nav")) g_inRage = false;
+            // D-264 (owner: "I couldn't do any motion hits with the axe at the very end, after the finisher"; owner log: R3
+            // stun-grab finisher attRageGrabEnter -> csDraugr00BareRageGruntRunEnter / Exit02 - no L3+R3 - took as
+            // "Spartan Rage ON", then 12 s of axe swings judged as missed punches until "navcombatidle_right" ended it):
+            // the stun grab's names hold "Rage" but it is not Spartan Rage, and locomotion comes as "movement#navaxewalklf"
+            // / "axe_run_start#nav..." (the "nav" after the '#'), which never ended it. Now a grab / finisher (*RageGrab*,
+            // cs*) never turns Rage on (only keeps it), any locomotion name (before or after the '#') ends it, and so does
+            // the axe in the hand (Spartan Rage is bare-handed - below)
+            const char* hashPart = strchr(prim, '#');
+            const bool loco = StartsWithI(prim, "nav") || (hashPart && StartsWithI(hashPart + 1, "nav"));
+            const bool grabOrScene = ContainsI(prim, "ragegrab") || StartsWithI(prim, "cs");
+            if (ContainsI(prim, "rageexit")) g_inRage = false;
+            else if (ContainsI(prim, "rage")) { if (!grabOrScene) g_inRage = true; }
+            else if (loco) g_inRage = false;
             if (g_inRage.load() != was) Log("combat: Spartan Rage %s (%s)", g_inRage.load() ? "ON" : "off", prim);
             const bool sprint = StartsWithI(prim, "navbrutalrun");
             if (sprint != g_sprinting.load()) g_sprinting = sprint;
+        }
+        if (g_inRage.load() && AxeInHand()) {  // D-264: the axe back in the hand - no Spartan Rage (bare-handed)
+            g_inRage = false;
+            Log("combat: Spartan Rage off (the axe is in the hand - D-264)");
         }
         static bool attPrev = false;
         static int attLogs = 0;
@@ -1412,7 +1493,12 @@ void CombatTick() {
         // game's alone - no hold starts, and a running hold (an attack's tail kept writing Kratos' position / facing
         // every frame, LIVE owner log: HOLD re-entered during csaxelightcombo01blendlight) is released at once
         const bool syncMove = f1 && (HeroInSyncMove() || now < g_finisherUntil.load());
-        const bool attack = f1 && !syncMove && !bladesFree &&
+        // D-247 (owner: "in first person without motion controls, spamming R1 the axe got stuck in Baldur"; owner log:
+        // the light combo ANIMATE, then its axe-stick follow-up csglobalmeleestickf01 went "none -> HOLD" and Baldur's
+        // csBaldurAxeStuckCounter): the held-spot machinery (D-062: the position held - no lunge -, the attack aimed at the
+        // view, the following moves held) still started for every F1 attack with motion controls off. Off, attacks are the
+        // game's alone, as in third person (the stick into Baldur and his counter are the game's own combo outcome)
+        const bool attack = f1 && MotionControls() && !syncMove && !bladesFree &&
                             ((ActiveMoveHash() && IsAttackAnim(anim) && !StartsWithI(anim, "def")) ||
                              (IsAttackAnim(prim) && !StartsWithI(prim, "def")));
         float sx = 0.f, sy = 0.f;
@@ -1860,6 +1946,7 @@ void CombatTick() {
                     if (float* c = ControllerPos()) { c[0] = unequipPos[0]; c[2] = unequipPos[1]; }
                 }
             }
+            if (!MotionControls()) want = 1.f;  // D-244: no attack / follow-up / put-away speed-up without motion controls
             if (want != applied) {
                 (void)savedTs;
                 if (HeroTimeScaleWish(0, want)) applied = want;  // D-203: through the arbiter (owner 0 = combat)

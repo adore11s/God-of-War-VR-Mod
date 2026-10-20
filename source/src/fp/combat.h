@@ -13,6 +13,10 @@ namespace gowvr::fp {
 void CombatTick();                      // game thread, every frame (after the move reader)
 float CombatHoldWeight();               // 0..1 weight of the held pose for the hero's world passes
 bool CombatArmsFromAnimation();         // true while ANIMATE: the arm IK stands down
+// D-244: VR settings panel "Motion controls" (gowvr.ini motion_controls, default 1, live). Off = first person with the
+// controllers as a plain gamepad: no arm IK, no gesture attacks, attacks / evades play their animation (no hold, no
+// speed-up, no hit boost); everything else in F1 (view, hit reactions frozen, turning, walls) stays. Any thread.
+bool MotionControls();
 void CombatCameraOffset(float out[3]);  // world offset added to the F1 eye base (leaps / ANIMATE)
 float CombatBodyLift();                 // metres the held body is raised in the hero pass (leaps)
 void CombatReportRise(float rise);      // hero pass: animated neck height minus the held pose's (metres)
@@ -20,6 +24,7 @@ void CombatEnable(bool on);             // command "combat on|off", gowvr.ini co
 // D-062 combat rework (owner attack review, docs/F1_ATTACK_REVIEW.md); safe from any thread
 bool CombatInRage();                    // Spartan Rage active (from the hero's animation names)
 bool CombatRageMeter(float* value, float* max);  // D-094: the Spartan Rage meter (hero meter "Blood"); false = unread
+float CombatHealthFraction();  // D-267: Kratos' health / its max (hero meter "Health"), -1 = not read
 bool CombatRageReady();                 // D-094: the Spartan Rage meter is full (L3+R3 enters Rage)
 // D-097 interaction context (gameplay F1; from the hero's animation names / the sync-move flag)
 bool ContextHandAuthored(int h);        // this hand (0 left, 1 right) follows the animation, not the controller

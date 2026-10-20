@@ -9,6 +9,9 @@
 #include "../stereo/mutate.h"
 #include "../stereo/sharpui.h"
 #include "../frame/rendersize.h"
+#include "../fp/firstperson.h"
+#include "../input/vrmap.h"
+#include "../fp/combat.h"
 #include "panel.h"
 #include "../stereo/sharpui.h"
 #include <windows.h>
@@ -95,6 +98,7 @@ template <class F> bool Get(XrInstance inst, const char* name, F& fn) {
 // ---- state -----------------------------------------------------------------------------------------------------------
 std::atomic<bool> g_want{false};
 char g_systemName[256] = "";
+uint32_t g_maxLayers = 16;  // the runtime's composition layer limit (16 is the OpenXR minimum)
 // for the VR summary in the log (LogSummary)
 char g_runtimeJson[MAX_PATH + 32] = "";  // runtime manifest + where it came from
 char g_runtimeName[192] = "";            // the runtime's own name and version
@@ -155,7 +159,11 @@ ID3D11PixelShader* g_ps = nullptr;
 ID3D11PixelShader* g_psHud = nullptr;  // the HUD layer: premultiplied gamma -> premultiplied linear (sRGB target)
 ID3D11PixelShader* g_psCrop = nullptr;  // the eye blit cropped to the eye's own frustum (g_cropCb = the source rect)
 ID3D11Buffer* g_cropCb = nullptr;
+ID3D11PixelShader* g_psVig = nullptr;      // D-267: the low-health vignette over an eye image
+ID3D11Buffer* g_vigCb = nullptr;           // its constants (b1: the eye's fov tangents; strength, angles, red)
+ID3D11BlendState* g_blendPremul = nullptr;  // premultiplied "over" (the vignette)
 ID3D11SamplerState* g_samp = nullptr;
+ID3D11SamplerState* g_sampHud = nullptr;  // D-265: anisotropic, for the HUD layer's copy
 ID3D11RasterizerState* g_rs = nullptr;
 
 SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -707,9 +715,12 @@ bool RefreshSystem() {
     XrSystemGetInfo si{XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
     XR_CHECK(xrGetSystem(g_inst, &si, &g_sys));
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
-    if (Succeeded(xrGetSystemProperties(g_inst, g_sys, &sp)) && strcmp(g_systemName, sp.systemName)) {
-        strcpy_s(g_systemName, sp.systemName);
-        Log("xr: system '%s' vendor=0x%x", sp.systemName, sp.vendorId);
+    if (Succeeded(xrGetSystemProperties(g_inst, g_sys, &sp))) {
+        if (sp.graphicsProperties.maxLayerCount) g_maxLayers = sp.graphicsProperties.maxLayerCount;
+        if (strcmp(g_systemName, sp.systemName)) {
+            strcpy_s(g_systemName, sp.systemName);
+            Log("xr: system '%s' vendor=0x%x, up to %u layers", sp.systemName, sp.vendorId, g_maxLayers);
+        }
     }
     return true;
 }
@@ -741,6 +752,15 @@ float4 ps(V i) : SV_Target { return float4(lin(dither(saturate(src.Sample(smp, i
 cbuffer Crop : register(b0) { float4 srcRect; };  // u0 v0 width height of the part of src to copy
 float4 ps_crop(V i) : SV_Target {
     return float4(lin(dither(saturate(src.Sample(smp, srcRect.xy + i.uv * srcRect.zw).rgb), i.pos.xy)), 1);
+}
+// D-267: the low-health vignette - by the angle off the eye's own axis (its fov tangents), so it is round in the view
+// whatever the image's shape, and the same in first and third person
+cbuffer Vig : register(b1) { float4 vigFov; float4 vigPar; };  // tan left right up down | strength, inner, outer (rad), red
+float4 ps_vig(V i) : SV_Target {
+    float tx = lerp(vigFov.x, vigFov.y, i.uv.x), ty = lerp(vigFov.z, vigFov.w, i.uv.y);
+    float ang = atan(sqrt(tx * tx + ty * ty));
+    float a = vigPar.x * smoothstep(vigPar.y, vigPar.z, ang);
+    return float4(lin(float3(vigPar.w, 0.01, 0.01)) * a, a);
 }
 float4 ps_hud(V i) : SV_Target {
     float4 c = src.Sample(smp, i.uv);
@@ -779,6 +799,26 @@ bool CreateBlit() {
         hb->Release();
     }
     if (!g_psHud) Log("xr: HUD layer shader unavailable - the HUD is pasted into the eye images");
+    {   // D-267
+        ID3DBlob* vb = nullptr;
+        if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", nullptr, nullptr, "ps_vig", "ps_5_0", 0, 0, &vb, &err))) {
+            if (FAILED(g_dev->CreatePixelShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &g_psVig))) g_psVig = nullptr;
+            vb->Release();
+        }
+        D3D11_BUFFER_DESC vd{32, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        if (g_psVig && FAILED(g_dev->CreateBuffer(&vd, nullptr, &g_vigCb))) g_vigCb = nullptr;
+        D3D11_BLEND_DESC bl{};
+        bl.RenderTarget[0].BlendEnable = TRUE;
+        bl.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        bl.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bl.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bl.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+        bl.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+        bl.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bl.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        if (g_psVig && FAILED(g_dev->CreateBlendState(&bl, &g_blendPremul))) g_blendPremul = nullptr;
+        if (!g_psVig || !g_vigCb || !g_blendPremul) Log("xr: low-health vignette shader unavailable (D-267)");
+    }
     ID3DBlob* cb = nullptr;
     if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "blit", defs, nullptr, "ps_crop", "ps_5_0", 0, 0, &cb, &err))) {
         if (FAILED(g_dev->CreatePixelShader(cb->GetBufferPointer(), cb->GetBufferSize(), nullptr, &g_psCrop))) g_psCrop = nullptr;
@@ -795,6 +835,15 @@ bool CreateBlit() {
     rd.FillMode = D3D11_FILL_SOLID;
     rd.CullMode = D3D11_CULL_NONE;
     ok = ok && SUCCEEDED(g_dev->CreateSamplerState(&sd, &g_samp)) && SUCCEEDED(g_dev->CreateRasterizerState(&rd, &g_rs));
+    // D-265 (owner: "is the health / Spartan / runic bar sharp? it looks pixelated"): the HUD layer's copy shrinks the
+    // full-resolution HUD by different amounts across and down (owner log: 2304 x 2304 -> ~1076 x 1605, 2.1x and 1.4x); a
+    // trilinear sampler takes ONE detail level, the coarser one, for both - the bars came from the half-size level and
+    // were stretched back up vertically. An anisotropic sampler takes the level of the smaller shrink and several samples
+    // along the larger one
+    D3D11_SAMPLER_DESC sh = sd;
+    sh.Filter = D3D11_FILTER_ANISOTROPIC;
+    sh.MaxAnisotropy = 16;
+    if (ok && FAILED(g_dev->CreateSamplerState(&sh, &g_sampHud))) g_sampHud = nullptr;
     D3D_FEATURE_LEVEL fl = g_dev->GetFeatureLevel(), chosen;
     ok = ok && SUCCEEDED(g_dev->QueryInterface(__uuidof(ID3D11Device1), (void**)&g_dev1)) &&
          SUCCEEDED(g_dev1->CreateDeviceContextState(0, &fl, 1, D3D11_SDK_VERSION, __uuidof(ID3D11Device1), &chosen,
@@ -804,7 +853,7 @@ bool CreateBlit() {
 }
 
 void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
-             uint32_t w, uint32_t h, ID3D11Buffer* cb = nullptr);
+             uint32_t w, uint32_t h, ID3D11Buffer* cb = nullptr, ID3D11SamplerState* smp = nullptr);
 
 void Blit(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h) {
     ID3D11ShaderResourceView* srv = nullptr;
@@ -838,9 +887,57 @@ void BlitCrop(ID3D11DeviceContext1* ctx, ID3D11Texture2D* src, ID3D11RenderTarge
     srv->Release();
 }
 
-// a full-screen pass of `ps` sampling `srv` into the top-left w x h of `rtv` (`cb`: its constant buffer b0)
+// D-267: the low-health vignette (ps_vig) over the top-left w x h of an eye image `rtv` whose frustum is `f`; strength 0..1
+void DrawLowHealth(ID3D11DeviceContext1* ctx, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h, const Fov& f,
+                   float strength) {
+    if (!g_psVig || !g_vigCb || !g_blendPremul || strength <= 0.001f) return;
+    // D-268 (owner, D-267 build: "I still don't see the red low-health effect, it's still around the window"; owner log:
+    // on at 345.2 s, 2 % health, dead 5 s later): 24 -> 50 deg was the lenses' rim, where the game's own sits. Now from
+    // 12 deg off the eye's axis, full at 36, stronger and a brighter red - inside the view. D-269 (owner, D-268 build: "it's
+    // working now, but way too strong"): 16 -> 40 deg, alpha 0.5 (was 0.85), red 0.6
+    // D-270 (owner: "just a tiny bit less, like 5 less"): 0.45
+    static const float maxA = fminf(fmaxf(config::GetFloat("low_health_alpha", 0.45f), 0.f), 1.f);
+    static const float inner = config::GetFloat("low_health_inner_deg", 16.f) * 0.0174533f;
+    static const float outer = config::GetFloat("low_health_outer_deg", 40.f) * 0.0174533f;
+    static const float red = fminf(fmaxf(config::GetFloat("low_health_red", 0.6f), 0.f), 1.f);
+    static bool drawnLogged = false;
+    if (!drawnLogged) {
+        drawnLogged = true;
+        Log("xr: low-health vignette drawn - strength %.2f, eye frustum %.0f / %.0f / %.0f / %.0f deg, from %.0f to %.0f deg "
+            "off its axis (D-267 / D-268)", strength, f.left * 57.2958f, f.right * 57.2958f, f.up * 57.2958f,
+            f.down * 57.2958f, inner * 57.2958f, outer * 57.2958f);
+    }
+    const float k[8] = {tanf(f.left), tanf(f.right), tanf(f.up), tanf(f.down), strength * maxA, inner,
+                        fmaxf(outer, inner + 0.02f), red};
+    ctx->UpdateSubresource(g_vigCb, 0, nullptr, k, 0, 0);
+    ID3DDeviceContextState* prev = nullptr;
+    ctx->SwapDeviceContextState(g_blitState, &prev);
+    D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
+    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx->IASetInputLayout(nullptr);
+    ctx->VSSetShader(g_vs, nullptr, 0);
+    ctx->PSSetShader(g_psVig, nullptr, 0);
+    ctx->PSSetConstantBuffers(1, 1, &g_vigCb);
+    ctx->RSSetState(g_rs);
+    ctx->RSSetViewports(1, &vp);
+    const float bf[4] = {0, 0, 0, 0};
+    ctx->OMSetBlendState(g_blendPremul, bf, 0xffffffffu);
+    ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    ctx->Draw(3, 0);
+    // (the blit state object keeps what is set in it: back to no blending / no b1 for the other blits)
+    ctx->OMSetBlendState(nullptr, bf, 0xffffffffu);
+    ID3D11Buffer* noCb = nullptr;
+    ctx->PSSetConstantBuffers(1, 1, &noCb);
+    ID3D11RenderTargetView* noRtv = nullptr;
+    ctx->OMSetRenderTargets(1, &noRtv, nullptr);
+    ctx->SwapDeviceContextState(prev, nullptr);
+    if (prev) prev->Release();
+}
+
+// a full-screen pass of `ps` sampling `srv` into the top-left w x h of `rtv` (`cb`: its constant buffer b0; `smp`: the
+// sampler, trilinear when null)
 void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv,
-             uint32_t w, uint32_t h, ID3D11Buffer* cb) {
+             uint32_t w, uint32_t h, ID3D11Buffer* cb, ID3D11SamplerState* smp) {
     ID3DDeviceContextState* prev = nullptr;
     ctx->SwapDeviceContextState(g_blitState, &prev);  // the game's whole pipeline state is parked in `prev`
     D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
@@ -849,7 +946,8 @@ void BlitSrv(ID3D11DeviceContext1* ctx, ID3D11ShaderResourceView* srv, ID3D11Pix
     ctx->VSSetShader(g_vs, nullptr, 0);
     ctx->PSSetShader(ps, nullptr, 0);
     ctx->PSSetShaderResources(0, 1, &srv);
-    ctx->PSSetSamplers(0, 1, &g_samp);
+    ID3D11SamplerState* useSmp = smp ? smp : g_samp;
+    ctx->PSSetSamplers(0, 1, &useSmp);
     if (cb) ctx->PSSetConstantBuffers(0, 1, &cb);
     ctx->RSSetState(g_rs);
     ctx->RSSetViewports(1, &vp);
@@ -1448,7 +1546,7 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
             config::GetFloat("jitter_per_frame", 1.f), config::GetFloat("dlss_per_eye", 1.f),
             config::GetFloat("dlss_vr_phases", 0.f), config::GetFloat("dlss_vr_sharpness", 0.f), config::GetFloat("mv_health", 1.f),
             config::GetFloat("render_size_auto", 1.f), config::GetFloat("ui_reticle_mode", 2.f),
-            config::GetFloat("finisher_third_person", 0.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f),
+            config::GetFloat("finisher_third_person", 1.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f),
             config::GetFloat("hold_bad_poses", 1.f), config::GetFloat("dlss_fixes_auto", 1.f),
             config::GetFloat("afr_rendering", 0.f), config::GetFloat("hand_smoothing", 1.f));
     }
@@ -1654,6 +1752,50 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     static const int cropMode = (int)config::GetFloat("crop_to_eye_fov", 2.f);
     const bool cropOn = cropMode == 1 || (cropMode == 2 && !strstr(g_runtimeName, "SteamVR"));
     const bool crop = cropOn && !bb && used && used->valid && used->hasOwnFov && g_psCrop && g_cropCb;
+    // D-267 (owner: "the low-health effect is drawn around the window, not part of the UI - can it be made visible? not a
+    // small rectangle that follows my view; the same in first and third person"; "it comes at about 10 % health or less").
+    // The game's own (hero script: playerHealthCriticalThreshold -> the full-screen effect fseVignetteTakeDmgCritical, a
+    // post-process vignette on the rendered image) sits at the edges of the eye images, which in VR are the far edges of
+    // the lenses. Now, at low_health_frac (0.10) of Kratos' health or less (off again above 0.12; the hero meter "Health",
+    // combat.cpp), a dark red vignette is laid over each eye image: from low_health_inner_deg (24) off the eye's axis to
+    // low_health_outer_deg (50), up to low_health_alpha (0.7), with a heartbeat-like pulse; it fades in / out over ~0.4 s.
+    // By angle, from the headset's own frustum - round, the whole view's frame, the same in every mode. Not on the flat
+    // screen (menus). gowvr.ini low_health_vignette 0 = off
+    float lowHealth = 0.f;
+    {
+        static const bool on = config::GetFloat("low_health_vignette", 1.f) > 0.5f;
+        // D-272 (owner: "maybe it's less than 20 % of health"): 0.20 (was 0.10)
+        static const float onFrac = config::GetFloat("low_health_frac", 0.20f);
+        static bool low = false;
+        static float level = 0.f;
+        static LARGE_INTEGER qf{}, last{};
+        if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+        LARGE_INTEGER nowq;
+        QueryPerformanceCounter(&nowq);
+        const float gap = last.QuadPart ? (float)(nowq.QuadPart - last.QuadPart) / (float)qf.QuadPart : 1.f;
+        const float dt = fminf(gap, 0.1f);
+        last = nowq;
+        const float h = fp::CombatHealthFraction();
+        const bool wasLow = low;
+        // D-268: gowvr.ini low_health_test 1 shows it at any health (read live - to see / tune it without nearly dying)
+        const bool test = config::GetFloat("low_health_test", 0.f) > 0.5f;
+        low = on && (test || (h >= 0.f && (low ? h <= onFrac + 0.02f : h <= onFrac)));
+        if (low != wasLow) Log("xr: low health %s (%.0f %% health, D-267)", low ? "- vignette on" : "over - vignette off", h * 100.f);
+        level = low ? fminf(1.f, level + dt / 0.4f) : fmaxf(0.f, level - dt / 0.4f);
+        // D-273 (owner: "after I die and respawn, for two seconds I can see the red effect - I shouldn't"; owner log: dead
+        // at 0 %, the respawn's fade on the 2D screen 114.7 - 119.25 s with health back to 100 % at 114.95, stereo again
+        // 119.43): this runs on stereo frames only, so the first one after the respawn faded the full-strength vignette
+        // out as if from a heal. After a gap of more than 0.25 s without stereo frames (a death fade, a load, a menu) it
+        // takes the state at once
+        if (gap > 0.25f) level = low ? 1.f : 0.f;
+        if (level > 0.f) {
+            // a heartbeat: two beats a second apart pairs (thump-thump, pause)
+            const double t = (double)nowq.QuadPart / (double)qf.QuadPart;
+            const float ph = (float)fmod(t, 1.0);
+            const float beat = fmaxf(expf(-powf((ph - 0.05f) / 0.07f, 2.f)), 0.6f * expf(-powf((ph - 0.30f) / 0.07f, 2.f)));
+            lowHealth = level * (0.72f + 0.28f * beat);
+        }
+    }
     for (int e = 0; e < 2 && ok; ++e) {
         EyeSwap& s = g_eye[e];
         const int idx = AcquireReady(s, e ? "eye 1" : "eye 0");  // D-110
@@ -1672,6 +1814,11 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
             }
         } else {
             Blit(ctx, src[e], s.rtvs[idx], s.w, s.h);
+        }
+        if (lowHealth > 0.f) {  // D-267: over the image as it is submitted (its frustum)
+            Fov vf{g_views[e].fov.angleLeft, g_views[e].fov.angleRight, g_views[e].fov.angleUp, g_views[e].fov.angleDown};
+            if (used && used->valid) vf = crop ? used->ownFov[e] : used->fov[e];
+            DrawLowHealth(ctx, s.rtvs[idx], s.w, s.h, vf, lowHealth);
         }
         const bool cap = g_hmdReq.load();
         if (cap) HmdCapture(ctx, e, s.images[idx]);
@@ -1702,11 +1849,71 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         g_lastKind = kLastProjection;
     }
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, g_space, 2, pv};
-    const XrBaseHeader* layers[3] = {(const XrBaseHeader*)&layer, nullptr, nullptr};
+    const XrBaseHeader* layers[16] = {(const XrBaseHeader*)&layer};
     uint32_t nLayers = ok ? 1u : 0u;
     // the HUD of each eye as its own quad (sharpui.cpp): where the paste put it - centred in the eye's frustum, ui_scale
     // of it - in front of that eye only, so the compositor samples the full-resolution HUD once
-    XrCompositionLayerQuad hudQ[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
+    XrCompositionLayerQuad hudQ[2][6] = {};
+    // D-246 (owner, a Pimax Crystal Light player: "everything looks normal until the main menu shows up - then it looks
+    // doubled, I can only play with one eye closed"): each eye's HUD quad was placed along THAT eye's orientation. Pimax
+    // headsets report canted (outward-turned) eye views: the left eye's menu then sat a few degrees left, the right eye's
+    // right - two places the eyes cannot fuse (the 3D scene is rendered per eye correctly, so only the HUD / menus doubled).
+    // Both quads now take the HEAD's orientation (the two eye orientations averaged): straight ahead for both eyes,
+    // parallel like on any other headset. With parallel eye views (PSVR2, Quest, Index) the average is the same rotation,
+    // so nothing changes there. gowvr.ini hud_layer_head_aligned 0 = per eye as before
+    static const bool hudHeadAligned = config::GetFloat("hud_layer_head_aligned", 1.f) > 0.5f;
+    XrQuaternionf hudHeadQ = pv[0].pose.orientation;
+    if (hudHeadAligned) {
+        const XrQuaternionf& a = pv[0].pose.orientation;
+        XrQuaternionf b = pv[1].pose.orientation;
+        if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0.f) { b.x = -b.x; b.y = -b.y; b.z = -b.z; b.w = -b.w; }
+        XrQuaternionf m{a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+        const float n = sqrtf(m.x * m.x + m.y * m.y + m.z * m.z + m.w * m.w);
+        if (n > 1e-6f) { m.x /= n; m.y /= n; m.z /= n; m.w /= n; hudHeadQ = m; }
+    }
+    // D-260 (owner: "in first person, only when you hover your left hand over your head show the health / Spartan / runic
+    // bars; make them bigger in F1 and move them more toward the centre"; "the health and Spartan bar are at the far left
+    // bottom corner, the runic bar at the far right bottom corner"): while the left-hand peek (D-218) shows the combat HUD
+    // in gameplay F1 - and hud_peek_linger_ms after it, while the game fades the bars out - each eye's HUD goes out as four
+    // quads of the same image: the top part and the bottom middle where they always are, and the two bottom corner blocks
+    // (hud_peek_w x hud_peek_h of the HUD) hud_peek_zoom x bigger, their outer corners pulled hud_peek_pull of the way
+    // toward the middle. gowvr.ini hud_peek_move 0 = the HUD as one quad, as before
+    static const bool peekMove = config::GetFloat("hud_peek_move", 1.f) > 0.5f;
+    static const ULONGLONG peekLinger = (ULONGLONG)fmaxf(config::GetFloat("hud_peek_linger_ms", 4500.f), 0.f);
+    static const float peekZoom = fminf(fmaxf(config::GetFloat("hud_peek_zoom", 1.3f), 0.5f), 3.f);
+    static const float peekPull = fminf(fmaxf(config::GetFloat("hud_peek_pull", 0.35f), 0.f), 0.9f);
+    static const float peekW = fminf(fmaxf(config::GetFloat("hud_peek_w", 0.3f), 0.05f), 0.45f);
+    static const float peekH = fminf(fmaxf(config::GetFloat("hud_peek_h", 0.3f), 0.05f), 0.9f);
+    static ULONGLONG peekSeen = 0;
+    const ULONGLONG nowMs = GetTickCount64();
+    // D-262: first person (F1 / F3) only; hud_peek_linger_ms 3000 (was 600: owner - "after one or two seconds it goes back
+    // to regular size, then the small UI shows ~3 more seconds and fades"). D-265: 4500 (owner, D-262 build: "good until
+    // the last second - for about a second the HUD still goes small while it fades away")
+    const int peekFpm = fp::FpMode();
+    const bool peekFirstPerson = peekFpm == 1 || peekFpm == 2;
+    if (peekMove && peekFirstPerson && input::HudPeek()) peekSeen = nowMs;
+    const bool peekSplit = peekFirstPerson && peekSeen && nowMs - peekSeen <= peekLinger && g_maxLayers >= 9;
+    {
+        static bool wasSplit = false;
+        static int splitLogs = 0;
+        if (peekSplit != wasSplit && splitLogs++ < 40)
+            Log("xr: HUD %s (D-260: corner blocks x%.2f, pulled %.2f toward the middle)",
+                peekSplit ? "peek - the bottom corners moved in" : "back to one quad", peekZoom, peekPull);
+        wasSplit = peekSplit;
+    }
+    // D-266 (owner: "in F1 move the objective HUD a tiny bit down and right - toward the centre, it is in the top left
+    // corner"): in gameplay F1 (not in a shop, whose screens fill the HUD) the HUD's top-left block (hud_obj_w 0.3 x
+    // hud_obj_h 0.25 of it - the objective, clear of the compass at the top middle) goes out as its own quad, moved
+    // hud_obj_right / hud_obj_down (0.07 / 0.07 of the HUD's width / height) toward the middle; the rest of the top band
+    // and everything below stay where they are. Three quads an eye (six with the D-260 peek: 13 layers - the objective
+    // move is dropped when the runtime takes fewer). gowvr.ini hud_obj_move 0 = off
+    static const bool objMoveOn = config::GetFloat("hud_obj_move", 1.f) > 0.5f;
+    static const float objW = fminf(fmaxf(config::GetFloat("hud_obj_w", 0.3f), 0.05f), 0.6f);
+    static const float objH = fminf(fmaxf(config::GetFloat("hud_obj_h", 0.25f), 0.05f), 0.5f);
+    static const float objRight = fminf(fmaxf(config::GetFloat("hud_obj_right", 0.07f), -0.5f), 0.5f);
+    static const float objDown = fminf(fmaxf(config::GetFloat("hud_obj_down", 0.07f), -0.5f), 0.5f);
+    const bool objMove = objMoveOn && peekFpm == 1 && !fp::InShop() && g_maxLayers >= (peekSplit ? 13u : 7u) &&
+                         (!peekSplit || objH < 1.f - peekH);
     for (int e = 0; e < 2 && ok && g_psHud; ++e) {
         ID3D11ShaderResourceView* hsrv = nullptr;
         uint32_t hw = 0, hh = 0;
@@ -1714,33 +1921,71 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         if (!stereo::SharpUiHudLayer(e, &hsrv, &hw, &hh, &sx, &sy)) continue;
         // texels for ~1.5 x the headset image's pixels under the HUD (the compositor's own downsampling stays mild)
         static const float density = fminf(fmaxf(config::GetFloat("hud_layer_density", 1.5f), 0.5f), 4.f);
-        const uint32_t qw = (uint32_t)fminf((float)hw, ceilf(density * sx * (float)g_eye[e].w));
-        const uint32_t qh = (uint32_t)fminf((float)hh, ceilf(density * sy * (float)g_eye[e].h));
+        // D-265: while the corner blocks are shown hud_peek_zoom x bigger, the copy is that much larger too - the enlarged
+        // bars keep hud_layer_density texels per headset pixel (the rest of the HUD gets more, harmless)
+        const float dens = density * (peekSplit ? peekZoom : 1.f);
+        const uint32_t qw = (uint32_t)fminf((float)hw, ceilf(dens * sx * (float)g_eye[e].w));
+        const uint32_t qh = (uint32_t)fminf((float)hh, ceilf(dens * sy * (float)g_eye[e].h));
         if (qw < 16 || qh < 16 || !EnsureRtSwapchain(g_hudSc[e], hw, hh, e ? "HUD layer eye 1" : "HUD layer eye 0")) continue;
         const int idx = AcquireReady(g_hudSc[e], "HUD layer");
         if (idx < 0) continue;
         static const FLOAT clear[4] = {0, 0, 0, 0};
         ctx->ClearRenderTargetView(g_hudSc[e].rtvs[idx], clear);
-        BlitSrv(ctx, hsrv, g_psHud, g_hudSc[e].rtvs[idx], qw, qh);
+        BlitSrv(ctx, hsrv, g_psHud, g_hudSc[e].rtvs[idx], qw, qh, nullptr, g_sampHud);  // D-265
         ReleaseImage(g_hudSc[e]);
         const XrFovf& f = renderedFov[e];  // (not pv's: the HUD was placed in the rendered frustum, sharpui.cpp)
         const float D = 2.f, tl = tanf(f.angleLeft), tr = tanf(f.angleRight), tu = tanf(f.angleUp), td = tanf(f.angleDown);
         const float local[3] = {D * 0.5f * (tl + tr), D * 0.5f * (tu + td), -D};  // the frustum's middle at D metres
-        const float* q = &pv[e].pose.orientation.x;
-        float off[3];
-        QRotate(q, local, off);
-        XrCompositionLayerQuad& hq = hudQ[e];
-        hq = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u /*SOURCE_ALPHA, premultiplied*/, g_space,
-                                    e ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT,
-                                    {g_hudSc[e].sc, {{0, 0}, {(int32_t)qw, (int32_t)qh}}, 0}, pv[e].pose,
-                                    {D * (tr - tl) * sx, D * (tu - td) * sy}};
-        hq.pose.position.x += off[0];
-        hq.pose.position.y += off[1];
-        hq.pose.position.z += off[2];
-        layers[nLayers++] = (const XrBaseHeader*)&hq;
+        const XrQuaternionf hq0 = hudHeadAligned ? hudHeadQ : pv[e].pose.orientation;  // D-246
+        const float* q = &hq0.x;
+        XrPosef hudPose = pv[e].pose;
+        hudPose.orientation = hq0;
+        const float W = D * (tr - tl) * sx, H = D * (tu - td) * sy;  // the whole HUD's quad, metres
+        // one quad of the image's pixels (x0, y0)-(x1, y1), centred (cx, cy) metres from the HUD's middle, zoom x its size
+        auto addQuad = [&](int k, int32_t x0, int32_t y0, int32_t x1, int32_t y1, float cx, float cy, float zoom) {
+            const float l3[3] = {local[0] + cx, local[1] + cy, local[2]};
+            float o[3];
+            QRotate(q, l3, o);
+            XrCompositionLayerQuad& hq = hudQ[e][k];
+            hq = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u /*SOURCE_ALPHA, premultiplied*/, g_space,
+                                        e ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT,
+                                        {g_hudSc[e].sc, {{x0, y0}, {x1 - x0, y1 - y0}}, 0}, hudPose,
+                                        {W * (float)(x1 - x0) / (float)qw * zoom, H * (float)(y1 - y0) / (float)qh * zoom}};
+            hq.pose.position.x += o[0];
+            hq.pose.position.y += o[1];
+            hq.pose.position.z += o[2];
+            layers[nLayers++] = (const XrBaseHeader*)&hq;
+        };
+        const int32_t iw = (int32_t)qw, ih = (int32_t)qh;
+        // a part of the image where it always is (its own centre, unmoved)
+        int k = 0;
+        auto addKept = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+            addQuad(k++, x0, y0, x1, y1, W * (0.5f * (float)(x0 + x1) / (float)qw - 0.5f),
+                    H * (0.5f - 0.5f * (float)(y0 + y1) / (float)qh), 1.f);
+        };
+        const int32_t bw = (int32_t)(peekW * (float)qw), by = (int32_t)((1.f - peekH) * (float)qh);  // D-260 corner blocks
+        const bool corners = peekSplit && bw >= 2 && by >= 2 && ih - by >= 2 && iw - 2 * bw >= 2;
+        const int32_t upperEnd = corners ? by : ih;  // the bottom band is the corners' when they are moved
+        const int32_t ow = (int32_t)(objW * (float)qw), oh = (int32_t)(objH * (float)qh);  // D-266 objective block
+        if (objMove && ow >= 2 && oh >= 2 && iw - ow >= 2 && upperEnd - oh >= 2) {
+            addQuad(k++, 0, 0, ow, oh, W * (0.5f * (float)ow / (float)qw - 0.5f + objRight),
+                    H * (0.5f - 0.5f * (float)oh / (float)qh - objDown), 1.f);  // the objective, moved in
+            addKept(ow, 0, iw, oh);         // the rest of the top band
+            addKept(0, oh, iw, upperEnd);  // below it
+        } else {
+            addKept(0, 0, iw, upperEnd);
+        }
+        if (corners) {
+            const float fw = (float)bw / (float)qw, fy = (float)by / (float)qh;  // block width, top of the bottom band (uv)
+            addKept(bw, by, iw - bw, ih);  // the bottom middle
+            const float bwm = W * fw * peekZoom, bhm = H * (1.f - fy) * peekZoom;
+            const float cxo = 0.5f * W * (1.f - peekPull), cyo = -0.5f * H * (1.f - peekPull);  // the outer corners
+            addQuad(k++, 0, by, bw, ih, -cxo + 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);       // health / Spartan Rage
+            addQuad(k++, iw - bw, by, iw, ih, cxo - 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);  // runic
+        }
         if (++g_hudQuads <= 2 || g_hudQuads % 10000 == 0)
-            Log("xr: HUD layer eye %d %ux%u of %ux%u (%.2f x %.2f m at %.0f m) #%llu", e, qw, qh, hw, hh,
-                hq.size.width, hq.size.height, D, (unsigned long long)g_hudQuads);
+            Log("xr: HUD layer eye %d %ux%u of %ux%u (%.2f x %.2f m at %.0f m) #%llu", e, qw, qh, hw, hh, W, H, D,
+                (unsigned long long)g_hudQuads);
     }
     XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO, nullptr, g_frame.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
                       nLayers, layers};

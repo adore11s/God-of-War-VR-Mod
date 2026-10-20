@@ -12,8 +12,10 @@
 #include "../fp/arms.h"
 #include "../fp/combat.h"
 #include "../fp/walls.h"
+#include "../fp/movelog.h"
 #include "../core/config.h"
 #include "../input/vrmap.h"
+#include "../input/vpad.h"
 #include "../input/turning.h"
 #include "../vr/xr.h"
 #include "../diag/crashlog.h"
@@ -212,10 +214,75 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
         static int snapLogs = 0;
         if (snapLogs++ < 5) Log("turning: snap %+d x %.0f deg (view and body turned %.0f deg)", n, input::SnapStepRad() * 57.2958f, dy * 57.2958f);
     }
+    // D-251 (owner: "I get on a rope and quickly get off it - the body breaks (I see it a bit in front of me), no button
+    // prompts to get on the rope again, I can't jump over edges; going to third person and back fixes it"; owner log
+    // before the toggle: the head looked at (-0.85 0.52), the game's camera at (0.23 -0.96) - ~150 deg apart): in F1 the
+    // view follows the game camera only when the player turns it (or it jumps > 20 deg in a frame); a scripted camera's
+    // slower swing (the rope's) is not followed - right for automatic camera moves, but after the quick get-off the game
+    // camera stayed pointing behind the player, and the game's traversal prompts / look-at / jumps read that camera
+    // (view B). When a body-locked context (rope, ladder, climbing, sync moves ...) ends, the game camera now catches up
+    // with the view in the background (the snap turn's catch-up: steering only, the view does not move)
+    // D-255 (owner: "approaching a rope that goes down a wall facing away from me, Kratos flips his whole body to face the
+    // wall for the climb, but the view does not flip 180 deg - maybe like the boat fix"): in a body-locked context the
+    // drawn body keeps the GAME's facing, but the view's yaw only followed turns the player made (D-181 put the view at the
+    // body's current eye - its place, not its direction). During a body-locked traversal move (nav*: ropes, ladders,
+    // climbing, chains - not the boat, which has its own rule) every turn the game gives Kratos' body now turns the view
+    // with it, so a flip to face the wall flips the view. gowvr.ini climb_view_follows 0 = off
+    bool traversal = false;  // (also: no camera-cut following meanwhile - the body turn is the view's turn)
+    {
+        static const bool followOn = config::GetFloat("climb_view_follows", 1.f) > 0.5f;
+        static bool haveGy = false;
+        static float lastGy = 0.f, turned = 0.f;
+        float gp[3], gy = 0.f;
+        if (followOn && fp::ContextBodyLocked() && !fp::InBoat()) {
+            char prim[96];
+            fp::HeroPrimaryAnim(prim, sizeof(prim));
+            const char* act = fp::ActiveMoveAnim();
+            traversal = _strnicmp(prim, "nav", 3) == 0 || (act && _strnicmp(act, "nav", 3) == 0);
+        }
+        if (traversal && fp::GameRoot(gp, &gy)) {
+            if (haveGy) {
+                const float dg = WrapPi(gy - lastGy);
+                if (fabsf(dg) < 0.6f) {  // a turn over frames (not a teleport / respawn)
+                    g_cs.renderYaw = WrapPi(g_cs.renderYaw + dg);
+                    turned += dg;
+                }
+            }
+            lastGy = gy;
+            haveGy = true;
+        } else {
+            if (haveGy && fabsf(turned) > 0.5f) {
+                static int logs = 0;
+                if (logs++ < 20) Log("camsync: the view turned with Kratos' body in a climb / rope move (%.0f deg) (D-255)", turned * 57.2958f);
+            }
+            haveGy = false;
+            turned = 0.f;
+        }
+    }
+    {
+        static bool wasLocked = false;
+        const bool locked = fp::ContextBodyLocked();
+        if (wasLocked && !locked) {
+            const float off = WrapPi(g_cs.renderYaw + hmdYaw - camYaw);
+            if (fabsf(off) > 0.44f) {  // 25 deg
+                g_cs.alignLeft = off;
+                g_cs.alignSince = now;
+                g_cs.alignStuck = 0.f;
+                static int realigns = 0;
+                if (realigns++ < 20)
+                    Log("camsync: body-locked move over - the game camera turned back toward the view (%.0f deg) (D-251)",
+                        off * 57.2958f);
+            }
+        }
+        wasLocked = locked;
+    }
     const float rx = snap ? 0.f : in.hand[1].stick[0], ry = in.hand[1].stick[1];
     g_cs.stickHeld = g_cs.stickHeld ? (fabsf(rx) > 0.05f || fabsf(ry) > 0.05f) : (fabsf(rx) > 0.15f || fabsf(ry) > 0.15f);
-    if (g_cs.stickHeld || fabsf(d) > 0.35f) {  // the player turns (or a quick turn / cut): the view turns with it
-        if (fabsf(rx) > 0.05f || fabsf(d) > 0.35f) g_cs.renderYaw = WrapPi(g_cs.renderYaw + d);
+    // D-245: a physical pad's right stick or the mouse turning the camera is the player turning too (the view follows;
+    // no steering against it) - it was only the VR stick, so with those the F1 view did not turn and aiming fought them
+    const bool extLook = input::ExternalLookActive();
+    if (g_cs.stickHeld || extLook || fabsf(d) > 0.35f) {  // the player turns (or a quick turn / cut): the view turns with it
+        if (fabsf(rx) > 0.05f || extLook || (fabsf(d) > 0.35f && !traversal)) g_cs.renderYaw = WrapPi(g_cs.renderYaw + d);
         if (fabsf(rx) > 0.5f && fabsf(d) < 0.35f) {
             g_cs.learn += d * (rx > 0.f ? 1.f : -1.f);
             if (fabsf(g_cs.learn) > 0.6f) {
@@ -358,12 +425,21 @@ uint64_t g_uiScaled = 0, g_uiUpdates = 0;
 // game build a view laid out differently would show up as "not orthographic" / never marked instead of scaled.
 uint64_t g_uiSkipCam = 0, g_uiSkipPersp = 0, g_uiSharp = 0;
 bool g_lastPause = false, g_lastLoading = false, g_lastFaded = false, g_lastVideo = false;
+std::atomic<int> g_loadsDone{0};  // D-271: loading screens that ended this session
 float g_lastFadeA = 0.f;
 
 // D-102 (owner: "make the aiming icon bigger in F3 and F1 mode"): the UI is one layer (D-101), so in the first-person
 // modes it gets its own scale - ui_scale_fp 0.5 (third person keeps ui_scale 0.35). In F1 the Combat HUD (health / rage /
 // runic bars) is hidden anyway (CombatHudTick), so mainly the reticle, prompts and subtitles grow. "uiscalefp <s>"
 float g_uiScaleFp = -1.f;
+// D-257 (owner: "the UI is way too big - shrink it by about 25 %; in F1, checking my health with the left hand at the
+// head, I barely see the health bar at the edge - but don't break the shop's UI"): one overall multiplier on ui_scale /
+// ui_scale_fp (so a gowvr.ini holding the old numbers shrinks too), not on the shop's UI. gowvr.ini ui_size (0.75; 1 = as
+// before), read live
+float UiSizeMul() {
+    const float m = config::GetFloat("ui_size", 0.75f);
+    return m > 0.1f && m <= 2.f ? m : 1.f;
+}
 void UiScaleView(uint8_t* view) {
     if (g_uiScale < 0.f) g_uiScale = config::GetFloat("ui_scale", 0.35f);  // D-094b: 0.35 (owner; 0.75, 0.55, 0.4 were too big)
     if (g_uiScaleFp < 0.f) g_uiScaleFp = config::GetFloat("ui_scale_fp", 0.5f);
@@ -375,10 +451,13 @@ void UiScaleView(uint8_t* view) {
     static ULONGLONG aimSeen = 0;
     {
         const vr::InputSnapshot in = vr::XrInput();
-        if (in.focused && in.hand[0].active && in.hand[0].trigger > 0.25f) aimSeen = GetTickCount64();
+        if ((in.focused && in.hand[0].active && in.hand[0].trigger > 0.25f) || input::PlayerAimInput())  // D-245
+            aimSeen = GetTickCount64();
     }
     const bool aiming = aimSeen && GetTickCount64() - aimSeen < 400;
-    const float s = (fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale;
+    // D-257: the overall size (ui_size) shrinks everything but the shop's UI, which keeps its own size
+    const float s = fp::InShop() ? g_uiScale
+                                 : ((fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale) * UiSizeMul();
     if (!g_headCamOn || g_screen2D.load()) { ++g_uiSkipCam; return; }
     float* P = (float*)(view + 0xd0);
     if (P[11] != 0.f || P[15] != 1.f) { ++g_uiSkipPersp; return; }  // orthographic only (a perspective P has P23 = -1)
@@ -409,21 +488,50 @@ void UiScaleView(uint8_t* view) {
 // Touch a touchpad (Back) tap shows them for a few seconds). Entering F1 sets f1_combat_hud (default 2 Touch: hidden
 // until called; -1 leaves the game's setting); leaving F1 puts the player's own value back (kept in gowvr.ini
 // combat_hud_restore, so a setting saved by the game while in F1 is not taken as the player's)
+// D-262 (owner, D-260 build: "it only works when I hover my hand first - nothing appears - then hold L2, it appears";
+// "the rule shouldn't apply outside first person"; owner log: F1 "Combat HUD 2 -> 0", F1 off "back to 2", gowvr.ini
+// combat_hud_restore=2). STATIC (win_platform_009 sub_14075a2xx, game_objects_070, unattributed_140700000_034 / _038):
+// the bars' visibility is byte 0x141078feb == 1, or == 2 (Touch) with the touch timer 0x141079150 < 3.5 s; the timer is
+// reset to 0 while the pad's FingerOnTouchpad is set (EVT_TOUCH_STARTED to the UI scripts), counts up with the frame time
+// and sends EVT_TOUCH_ENDED when it passes 3.5. Off -> On by a write alone leaves the bars hidden until the scripts get
+// an event (aiming, as the owner found). Now F1 is Touch again (f1_combat_hud 2) and the peek is a TOUCH: in the
+// PlayStation mode the virtual pad reports a finger on the touchpad (vpad.cpp), so the game calls the bars up its own
+// way; when the hand comes down the timer is put at 3.45 s, so they go at once (not 3.5 s later). Without a PlayStation
+// pad (the Xbox mode) the peek writes On as before. Touch never comes up by itself in fights (only a touch resets the
+// timer); the peek no longer fires with the shield raised (vrmap.cpp). Outside first person (F1 / F3) no peek at all.
+// On a 2D screen (pause menu, settings) the byte is the player's own setting even in F1, so the menu shows it and the
+// game saves it - the old builds' F1 value got saved that way and came back in third person as "Touch". A 2 found in
+// combat_hud_restore (or, until the pause menu is first opened, in the byte outside F1) is taken as that leftover once
+// (gowvr.ini combat_hud_v262): the player's setting becomes On
 void CombatHudTick() {
     static int want = -2;
     if (want == -2) want = (int)config::GetFloat("f1_combat_hud", 2.f);
     uint8_t* v = (uint8_t*)GameVa(0x141078febull);
-    // D-218: while the left hand is held at the head the byte shows 1 (On); `real` is the setting underneath it - what
-    // the F1 rules below read and change, and what the byte goes back to when the hand comes down
+    float* touchT = (float*)GameVa(0x141079150ull);
+    // D-218: while the left hand is held at the head the byte shows 1 (On) / stays Touch with the touch; `real` is the
+    // setting underneath it - what the F1 rules below read and change, and what the byte goes back to afterwards
     static bool peekOn = false;
     static uint8_t peekReal = 1;
     uint8_t real = peekOn ? peekReal : *v;
+    static bool repair = config::GetFloat("combat_hud_v262", 0.f) < 0.5f;
+    static bool repairArmed = repair;
+    if (repairArmed) {
+        repairArmed = false;
+        config::SetFloat("combat_hud_v262", 1.f);
+        if ((int)config::GetFloat("combat_hud_restore", 1.f) == 2) {
+            config::SetFloat("combat_hud_restore", 1.f);
+            Log("hud: combat_hud_restore 2 was the old first-person value saved by the game - the player's setting is On (D-262)");
+        }
+    }
+    const bool menu = Screen2DFrame();
+    if (PauseMenuOpen()) repair = false;
     if (want >= 0 && want <= 2) {
         static bool applied = false;
-        const bool f1 = fp::FpMode() == 1;
+        const bool f1 = fp::FpMode() == 1 && !menu;
         if (f1 && !applied) {
             applied = true;
-            const int cur = real;
+            int cur = real;
+            if (repair && cur == 2) cur = 1;
             if (cur != want && cur <= 2) config::SetFloat("combat_hud_restore", (float)cur);
             real = (uint8_t)want;
             Log("hud: F1 - Combat HUD %d -> %d (%s)", cur, want, want == 2 ? "Touch: hidden until called" : want == 0 ? "Off" : "On");
@@ -432,18 +540,32 @@ void CombatHudTick() {
             const int restore = (int)config::GetFloat("combat_hud_restore", 1.f);
             if (real == want) {
                 real = (uint8_t)restore;
-                Log("hud: F1 off - Combat HUD back to %d", restore);
+                Log("hud: %s - Combat HUD back to %d", menu ? "menu open in F1 (the player's own setting meanwhile)" : "F1 off",
+                    restore);
             }
+        } else if (!f1 && !applied && repair && real == 2 && !menu) {
+            real = 1;
+            repair = false;
+            Log("hud: third person - Combat HUD 2 (the old first-person value saved by the game) -> 1 On (D-262)");
         }
     }
-    const bool peek = input::HudPeek();
+    const int fpm = fp::FpMode();
+    const bool peek = input::HudPeek() && (fpm == 1 || fpm == 2) && !menu;
+    const bool touch = peek && real == 2 && input::HudTouchPossible();
+    input::SetHudTouch(touch);
     if (peek) {
-        if (!peekOn) Log("hud: left hand at the head - Combat HUD shown (setting %d kept underneath, D-218)", (int)real);
+        if (!peekOn)
+            Log("hud: left hand at the head - Combat HUD shown %s (setting %d kept underneath, D-218 / D-262)",
+                touch ? "by a touch on the virtual touchpad" : "(On)", (int)real);
         peekOn = true;
         peekReal = real;
-        if (*v != 1) *v = 1;
+        const uint8_t show = touch ? 2 : 1;
+        if (*v != show) *v = show;
     } else {
-        if (peekOn) Log("hud: left hand down - Combat HUD back to %d (D-218)", (int)real);
+        if (peekOn) {
+            Log("hud: left hand down - Combat HUD back to %d (D-218)", (int)real);
+            if (real == 2 && *touchT < 3.45f) *touchT = 3.45f;  // D-262: gone now, not 3.5 s after the touch
+        }
         peekOn = false;
         if (*v != real) *v = real;
     }
@@ -570,6 +692,7 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
         // to stereo. "Playing" as the game itself tests it: handle set and not closing. (The other videos are the skill
         // previews in the menus - a 2D screen anyway.)
         const bool video = *At<uint64_t>(kVideoHandleVa) != 0 && *At<int32_t>(kVideoClosingVa) == 0;
+        if (g_lastLoading && !loading) ++g_loadsDone;  // D-271
         g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA; g_lastVideo = video;
         const bool on = g_headCamOn &&
                         (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded || video)));
@@ -1003,7 +1126,9 @@ void HeadCameraIntoViewA(uint8_t* view) {
         const float camPitch = asinf(fmaxf(-1.f, fminf(1.f, -c.m[2][1])));
         const float hmdPitch = asinf(fmaxf(-1.f, fminf(1.f, -center.m[2][1])));
         const vr::InputSnapshot in = vr::XrInput();
-        const bool aiming = in.focused && in.hand[0].active && in.hand[0].trigger > 0.3f;  // LT (vrmap: aim)
+        // D-245 (owner: "when using mouse or gamepad I can't do head-based aiming"): aiming was the VR left trigger only -
+        // a pad's L2 or the keyboard's aim key (Left Ctrl) never turned the head aiming on. Any device now
+        const bool aiming = (in.focused && in.hand[0].active && in.hand[0].trigger > 0.3f) || input::PlayerAimInput();
         const float ry = CamSyncYaw(camYaw, camPitch, hmdYaw, hmdPitch, syncActive, aiming);
         if (syncActive) {
             Mat4 cr = c;  // only the yaw of the "back" row is read in gameplay first person
@@ -1144,6 +1269,7 @@ bool HeadCameraForUi(Mat4* camToWorld, float* tanX, float* tanY) {
 }
 
 bool PauseMenuOpen() { return g_lastPause; }
+int LoadsFinished() { return g_loadsDone.load(); }
 
 void UiDiagText(char* out, size_t n) {
     sprintf_s(out, n,
@@ -1172,7 +1298,8 @@ float UiScaleCurrent() {
     const float s = g_uiScale < 0.f ? config::GetFloat("ui_scale", 0.35f) : g_uiScale;
     const float sFp = g_uiScaleFp < 0.f ? config::GetFloat("ui_scale_fp", 0.5f) : g_uiScaleFp;
     const int fpm = fp::FpMode();
-    return (fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s;
+    if (fp::InShop()) return s;  // D-257: the shop's UI keeps its size
+    return ((fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s) * UiSizeMul();
 }
 
 void SetHeadCamera(bool on) {

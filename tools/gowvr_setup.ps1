@@ -248,6 +248,15 @@ function Set-VrGameSettings([string]$game) {
                         'DLSSQuality' = $preset }
     if ($dlss) { $want['FSRQuality'] = 'Off' }  # (DLSS and FSR are one choice in the game)
     $manual['DLSSQuality'] = $(if ($dlss) { "DLSS: $presetName" } else { 'DLSS: Off' })
+    # owner 2026-10-21: with NVIDIA (DLSS chosen) also NVIDIA Reflex Low Latency On + Boost, latency markers and latency
+    # flash on (settings.ini LatencyEnable / LatencyBoost / LatencyMarkers / LatencyFlash)
+    if ($dlss) {
+        $want['LatencyEnable'] = 'On'; $want['LatencyBoost'] = 'On'; $want['LatencyMarkers'] = 'On'; $want['LatencyFlash'] = 'On'
+        $manual['LatencyEnable'] = 'NVIDIA Reflex Low Latency: On'
+        $manual['LatencyBoost'] = 'NVIDIA Reflex Low Latency: On + Boost'
+        $manual['LatencyMarkers'] = 'Latency markers: On'
+        $manual['LatencyFlash'] = 'Latency flash: On'
+    }
 
     $ini = Join-Path $game 'settings.ini'
     $failed = @()
@@ -293,6 +302,41 @@ function Set-VrGameSettings([string]$game) {
     }
 }
 
+# ---- the mod's own starting choices (owner 2026-10-21) -----------------------------------------------------------
+# First person while walking on, first person in cutscenes off, finishers in third person. A new gowvr.ini (written by
+# the mod on its first start) has them already. An existing one (an older version wrote finisher_third_person=0 into
+# it) gets them ONCE: the key installer_defaults marks that it was done - from then on the player's own changes stay.
+function Set-VrModDefaults([string]$game) {
+    $ini = Join-Path $game 'gowvr.ini'
+    if (-not (Test-Path -LiteralPath $ini)) {
+        Say 'VR settings: first person while walking on, in cutscenes off, finishers in third person (on the first start)'
+        return
+    }
+    try {
+        $lines = [System.Collections.Generic.List[string]]([System.IO.File]::ReadAllLines($ini))
+        foreach ($l in $lines) {
+            if ($l -match '^\s*installer_defaults\s*=\s*([0-9.]+)' -and [double]$Matches[1] -ge 1) {
+                Say 'VR settings: your first-person and finisher choices kept'
+                return
+            }
+        }
+        $want = [ordered]@{ 'first_person_walking' = '1'; 'first_person_cutscenes' = '0'; 'finisher_third_person' = '1' }
+        foreach ($k in $want.Keys) {
+            $found = $false
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match ('^\s*' + [regex]::Escape($k) + '\s*=')) { $lines[$i] = "$k=$($want[$k])"; $found = $true }
+            }
+            if (-not $found) { $lines.Add("$k=$($want[$k])") }
+        }
+        $lines.Add('# Set once by the installer (first person while walking on, in cutscenes off, finishers in third person) - your own changes are kept.')
+        $lines.Add('installer_defaults=1')
+        [System.IO.File]::WriteAllLines($ini, $lines, (New-Object System.Text.UTF8Encoding $false))
+        Say 'VR settings: first person while walking on, in cutscenes off, finishers in third person'
+    } catch {
+        Warn "The VR settings (gowvr.ini) could not be changed ($($_.Exception.Message))."
+    }
+}
+
 # =================================================================================================================
 if ($Mode -eq 'Install') {
     Banner 'GOD OF WAR VR MOD  -  INSTALL'
@@ -325,6 +369,7 @@ if ($Mode -eq 'Install') {
     try { Unblock-File -LiteralPath $dst } catch { }
 
     Set-VrGameSettings $game
+    Set-VrModDefaults $game
 
     Write-Host ''
     Say 'Done. From now on just start God of War as usual (Steam, Epic, GOG or GoW.exe)'

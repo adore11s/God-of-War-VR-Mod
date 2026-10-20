@@ -781,6 +781,7 @@ BYTE Trigger(float v, float threshold) {
 
 // D-218: the left hand held at the head (combat HUD shown); written by VrGamepad, read by the HUD tick (stereo/mutate.cpp)
 std::atomic<bool> g_hudPeek{false};
+bool g_headSwitchB = false;  // D-252: the right B press that switched first person (kept from the game until released)
 std::atomic<ULONGLONG> g_hudPeekAt{0};
 
 }  // namespace
@@ -839,7 +840,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             if (fmaxf(fabsf(L.stick[0]), fabsf(L.stick[1])) > 0.3f) lClickMoved = true;
         } else {
             if (lClickSince && !lClickSent && !combo) l3PulseUntil = now + 100;  // a quick sprint click
-            if (lClickSince && !lClickCombo && !lClickMoved && fp::FpMode() == 1 && CurMode() == Mode::Blades) {
+            if (lClickSince && !lClickCombo && !lClickMoved && fp::FpMode() == 1 && fp::MotionControls() && CurMode() == Mode::Blades) {
                 fp::ArmsBladeFlip(0);
                 vr::XrHaptic(0, 0.4f, 0.04f);
             }
@@ -847,21 +848,18 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         }
         if (combo) { lClickSent = true; lClickCombo = true; }  // this click belongs to the combo: never a sprint / flip
     }
-    // D-097 (owner: "the right VR controller trigger near your head - that's F1, and if you hold the trigger near your
-    // head it turns F3"): the right trigger pressed while the right hand is at the head (within head_zone_m 0.25 m of
-    // the eyes, not more than 0.10 m behind the face plane - the over-shoulder grab zone is further back - and between
-    // 0.25 m below and 0.10 m above the eyes) starts the gesture: released before head_hold_ms (700) toggles gameplay
-    // first person (F1), held that long toggles cutscene first person (F3, once). While the gesture runs the trigger
-    // never reaches the game (no R2, no heavy / charge, no Freezing Throw)
+    // D-252 (owner: "make switching between first and third person one click of the top-right button near your head - the
+    // O button on PSVR2 - walking: press once and it switches; in a cutscene: press once and it switches"; replaces D-097's
+    // right trigger at the head - release F1 / hold F3): the right controller's upper face button (PS VR2 O, Meta / Index
+    // B) pressed while the right hand is at the head (within head_zone_m 0.25 m of the eyes, not more than 0.10 m behind
+    // the face plane - the over-shoulder grab zone is further back - between 0.25 m below and 0.10 m above the eyes)
+    // toggles first person for what is playing: in a cutscene / scripted scene F3 (cutscene first person), otherwise F1
+    // (gameplay first person). That press never reaches the game (no dodge) until the button is released
     {
-        static bool headG = false, headHeld = false, trigDown = false;
-        static ULONGLONG headSince = 0;
+        static bool bDown = false;
         static const float zone = config::GetFloat("head_zone_m", 0.25f);
-        static const ULONGLONG headHoldMs = (ULONGLONG)config::GetFloat("head_hold_ms", 700.f);
-        const bool trigNow = R.active && (trigDown ? R.trigger > 0.30f : R.trigger > 0.60f);
-        const bool trigEdge = trigNow && !trigDown;
-        trigDown = trigNow;
-        if (trigEdge && !headG && R.gripValid) {
+        const bool bNow = R.active && R.b;
+        if (bNow && !bDown && R.gripValid) {
             vr::EyeViews v = vr::XrLatestViews();
             if (v.valid) {
                 float d[3];
@@ -874,47 +872,41 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
                     const float dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
                     const float behind = -(d[0] * fx + d[2] * fz), up = d[1];
                     if (dist < zone && behind < 0.10f && up > -0.25f && up < 0.10f) {
-                        headG = true;
-                        headHeld = false;
-                        headSince = now;
-                        vr::XrHaptic(1, 0.3f, 0.03f);
-                        Log("vrmap: right trigger at the head (%.2f m from the eyes, behind %.2f, up %.2f) - F1 on release, F3 if held",
-                            dist, behind, up);
+                        g_headSwitchB = true;
+                        if (fp::SceneAnimating()) {
+                            fp::SetCutsceneFP(!fp::CutsceneFP());
+                            Log("vrmap: B at the head (cutscene) -> first person in cutscenes %s (D-252)", fp::CutsceneFP() ? "ON" : "off");
+                        } else {
+                            fp::SetGameplayFP(!fp::GameplayFP());
+                            Log("vrmap: B at the head -> first person (walking) %s (D-252)", fp::GameplayFP() ? "ON" : "off");
+                        }
+                        vr::XrHaptic(1, 0.6f, 0.06f);
                     }
                 }
             }
         }
-        if (headG) {
-            if (trigNow) {
-                if (!headHeld && now - headSince >= headHoldMs) {
-                    headHeld = true;
-                    fp::SetCutsceneFP(!fp::CutsceneFP());
-                    vr::XrHaptic(1, 0.8f, 0.15f);
-                    Log("vrmap: right trigger held at the head -> F3 (cutscene first person) %s", fp::CutsceneFP() ? "ON" : "off");
-                }
-            } else {
-                if (!headHeld) {
-                    fp::SetGameplayFP(!fp::GameplayFP());
-                    vr::XrHaptic(1, 0.6f, 0.06f);
-                    Log("vrmap: right trigger at the head -> F1 (gameplay first person) %s", fp::GameplayFP() ? "ON" : "off");
-                }
-                headG = false;
-            }
-            s.hand[1].trigger = 0.f;  // (R refers to it) the gesture's trigger is not the game's
-        }
+        if (!bNow) g_headSwitchB = false;
+        bDown = bNow;
     }
     // D-218 (owner: "when I move my left hand to my head and hold it there, show my health, Spartan Rage and runic
     // bars"): the left hand within head_peek_m (0.22 m) of the eyes - in front of / beside the head (not more than 0.10 m
     // behind the face plane: the over-shoulder Blades grab is further back), between 0.30 m below and 0.15 m above
     // the eyes - for head_peek_ms (250) shows the combat HUD until it leaves (0.05 m hysteresis). No button involved;
     // the hand's buttons still reach the game. A light buzz on the left controller when the bars come up
+    // D-262 (owner: "the health HUD rule shouldn't apply outside first person - it's supposed to be just for the first
+    // person modes"; "not visible during combat"): only in first person (gameplay F1 / cutscene F3); not while the left
+    // grip is squeezed (the shield - a block raises the hand in front of the face) and not more than head_peek_front_m
+    // (0.15) in front of the eyes; the zone reaches higher (0.30 m above the eyes, head_peek_m 0.25) for a hand hovering
+    // over the head
     {
-        static const float zone = config::GetFloat("head_peek_m", 0.22f);
+        static const float zone = config::GetFloat("head_peek_m", 0.25f);
+        static const float front = config::GetFloat("head_peek_front_m", 0.15f);
         static const ULONGLONG dwell = (ULONGLONG)config::GetFloat("head_peek_ms", 250.f);
         static ULONGLONG since = 0;
         bool in = false;
         float dist = 0.f;
-        if (L.gripValid) {
+        const int fpm = fp::FpMode();
+        if (L.gripValid && (fpm == 1 || fpm == 2) && !g_gripHeld[0]) {
             vr::EyeViews v = vr::XrLatestViews();
             if (v.valid) {
                 float d[3];
@@ -927,7 +919,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
                     dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
                     const float behind = -(d[0] * fx + d[2] * fz), up = d[1];
                     const float lim = g_hudPeek.load() ? zone + 0.05f : zone;
-                    in = dist < lim && behind < 0.10f && up > -0.30f && up < 0.15f;
+                    in = dist < lim && behind < 0.10f && behind > -front && up > -0.30f && up < 0.30f;
                 }
             }
         }
@@ -946,7 +938,12 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     // D-164 (owner: "on the flat cinema screen - loading / options - I can't press R1"): in F1 the grip / trigger are
     // swing gestures, not R1 / R2; the 2D screen (pause, options, loading) takes plain buttons like the plain-button scenes
     // (grip = R1 / L1, trigger = R2, no gestures)
-    const bool plain = fp::FpMode() == 1 && (fp::ContextPlainButtons() || stereo::Screen2DFrame());
+    const bool plainScene = fp::FpMode() == 1 && (fp::ContextPlainButtons() || stereo::Screen2DFrame());
+    // D-244 (owner: VR settings "Motion controls" On / Off): off, gameplay F1 takes the plain mapping too - grip = R1 /
+    // L1 (block), trigger = R2, no swing / throw / grab gestures, no fists on Y, no Blade flips. Turning, walking toward
+    // the view and the head / chord gestures are not motion controls and stay (they use plainScene)
+    const bool motion = fp::MotionControls();
+    const bool plain = plainScene || (fp::FpMode() == 1 && !motion);
     for (int h = 0; h < 2; ++h) {  // grip hysteresis: press above 0.55, release below 0.40
         float q = s.hand[h].squeeze;
         g_gripHeld[h] = s.hand[h].active && (g_gripHeld[h] ? q > 0.40f : q > 0.55f);
@@ -988,7 +985,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         if (L.a) g->wButtons |= XINPUT_GAMEPAD_X;                          // Atreus
         // D-240: bare-handed / in Rage without finger sensing, Y held is the fists - not the game's Y (unless the axe is out
         // of the hand, thrown: then it recalls as always)
-        const bool yIsFists = config::GetFloat("fist_on_y", 1.f) > 0.5f && !L.fingersValid && !R.fingersValid &&
+        const bool yIsFists = motion && config::GetFloat("fist_on_y", 1.f) > 0.5f && !L.fingersValid && !R.fingersValid &&
                               fp::FpMode() == 1 && (CurMode() == Mode::Bare || CurMode() == Mode::Rage) && !fp::AxeThrown();
         if (L.b && !yIsFists) g->wButtons |= XINPUT_GAMEPAD_Y;             // recall axe / triangle
         static bool lbPrev = false;
@@ -1002,7 +999,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     }
     if (R.active) {
         // F1 gameplay: smooth turning at turn_speed, or snap turning (turning.cpp; the VR settings panel)
-        const bool f1Turn = fp::FpMode() == 1 && !plain;
+        const bool f1Turn = fp::FpMode() == 1 && !plainScene;  // D-244: turning is not a motion control
         float rs[2] = {R.stick[0], R.stick[1]};
         if (f1Turn) rs[0] = input::TurnStickX(R.stick[0]);
         Stick(rs, 0.15f, &g->sThumbRX, &g->sThumbRY);
@@ -1020,7 +1017,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         // D-097: the plain-button scenes too (the ogre ride's R1, mashing at doors / chests)
         if ((fp::FpMode() != 1 || plain) && g_gripHeld[1]) g->wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
         if (R.a) g->wButtons |= XINPUT_GAMEPAD_A;                          // interact / jump
-        if (R.b) g->wButtons |= XINPUT_GAMEPAD_B;                          // dodge
+        if (R.b && !g_headSwitchB) g->wButtons |= XINPUT_GAMEPAD_B;       // dodge (D-252: not the head switch's press)
         if (R.trackpadForce > 0.6f) g->wButtons |= XINPUT_GAMEPAD_BACK;    // map
         // D-035 D-pad (every mode; motion controllers have none - owner: "how do I equip the blades?"): hold the right
         // stick click and push the right stick = D-pad in that direction. Game defaults (action table 0x142506658,
@@ -1064,7 +1061,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
                 fp::CombatFinisherPressed();  // D-080: a stun finisher must not meet an attack hold
                 // D-087: F1 with the Blades - the plain right click (not the D-pad chord, not the combo) also flips the
                 // right Blade; R3 still goes to the game (lock-on / finisher)
-                if (fp::FpMode() == 1 && CurMode() == Mode::Blades) {
+                if (fp::FpMode() == 1 && motion && CurMode() == Mode::Blades) {
                     fp::ArmsBladeFlip(1);
                     vr::XrHaptic(1, 0.4f, 0.04f);
                 }
@@ -1136,6 +1133,40 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             }
         }
         if (now < pulseUntil) g->wButtons |= pulse;
+    }
+    // D-259 (owner, in the pause menu: "it's showing me to press arrows left and right but on VR controllers there is no
+    // mapping for those - make sure it's fixed for all VR controllers, a quick fix of joysticks working as arrows"): on a
+    // 2D screen (pause menu, settings, loading) a stick pushed past 0.6 is also that D-pad direction until it falls back
+    // below 0.35 - the right stick all four ways, the left stick left / right (its up / down already moves the
+    // selection). The sticks still go to the game as well
+    {
+        static WORD arrow[2] = {0, 0};
+        const bool menu = stereo::Screen2DFrame();
+        const vr::HandState* hs[2] = {&L, &R};
+        for (int h = 0; h < 2; ++h) {
+            const vr::HandState& H = *hs[h];
+            const float x = H.stick[0], y = H.stick[1];
+            WORD dp = arrow[h];
+            if (!menu || !H.active) dp = 0;
+            else if (dp) {
+                const float along = dp == XINPUT_GAMEPAD_DPAD_RIGHT ? x : dp == XINPUT_GAMEPAD_DPAD_LEFT ? -x
+                                  : dp == XINPUT_GAMEPAD_DPAD_UP ? y : -y;
+                if (along < 0.35f) dp = 0;
+            }
+            if (menu && H.active && !dp && fmaxf(fabsf(x), fabsf(y)) > 0.6f) {
+                if (fabsf(x) > fabsf(y)) dp = x > 0.f ? XINPUT_GAMEPAD_DPAD_RIGHT : XINPUT_GAMEPAD_DPAD_LEFT;
+                else if (h == 1) dp = y > 0.f ? XINPUT_GAMEPAD_DPAD_UP : XINPUT_GAMEPAD_DPAD_DOWN;
+            }
+            if (dp && dp != arrow[h]) {
+                static int arrowLogs = 0;
+                if (arrowLogs++ < 20)
+                    Log("vrmap: menu - %s stick pushed -> D-pad %s (D-259)", h ? "right" : "left",
+                        dp == XINPUT_GAMEPAD_DPAD_LEFT ? "left" : dp == XINPUT_GAMEPAD_DPAD_RIGHT ? "right"
+                        : dp == XINPUT_GAMEPAD_DPAD_UP ? "up" : "down");
+            }
+            arrow[h] = dp;
+            g->wButtons |= dp;
+        }
     }
     // the VR settings panel: a hand pointing at it clicks with its trigger - not the game's L2 / R2 then
     if (vr::PanelCapturesTrigger(0)) g->bLeftTrigger = 0;

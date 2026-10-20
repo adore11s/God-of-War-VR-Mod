@@ -7,6 +7,7 @@
 #include "../diag/cmd.h"
 #include "../frame/rendersize.h"
 #include "../stereo/mutate.h"
+#include "../fp/firstperson.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -16,8 +17,9 @@
 namespace gowvr::vr {
 namespace {
 
-constexpr int kW = 1000, kH = 1430;         // panel pixels (D-241: + the rendering method row)
-constexpr float kPanelW = 1.3f;             // metres
+constexpr int kW = 1000, kH = 1690;         // panel pixels (D-253: 11 rows of kRow + the hints)
+constexpr int kTop = 122, kRow = 128;      // D-253: the first row's label, the row pitch
+constexpr float kPanelW = 1.2f;             // metres (D-253: 11 rows)
 constexpr float kGap = 0.15f;               // between the screen and the panel
 constexpr int kCursorPx = 64;
 
@@ -27,7 +29,7 @@ const int kSizes[] = {1440, 1728, 2048, 2304, 2560, 2816};
 
 enum Action {
     kNone, kTurnSmooth, kTurnSnap, kStepDown, kStepUp, kPadXbox, kPadPs, kWallsOn, kWallsOff, kSizeDown, kSizeUp,
-    kFinisherFp, kFinisherTp, kVrOn, kVrOff, kAfrOn, kAfrOff
+    kFinisherFp, kFinisherTp, kVrOn, kVrOff, kAfrOn, kAfrOff, kMotionOn, kMotionOff, kF1On, kF1Off, kF3On, kF3Off
 };
 struct Button { RECT r; Action a; const wchar_t* text; bool selected; };
 
@@ -62,8 +64,9 @@ bool Snap() { return config::GetFloat("turn_snap", 0.f) > 0.5f; }
 bool Walls() { return config::GetFloat("walls_f1", 1.f) > 0.5f; }
 // owner 2026-10-18: finishers / executions in first person (as before) or third person (the game's own camera;
 // fp/firstperson.cpp FinisherScene)
-bool FinisherTp() { return config::GetFloat("finisher_third_person", 0.f) > 0.5f; }
+bool FinisherTp() { return config::GetFloat("finisher_third_person", 1.f) > 0.5f; }
 bool Afr() { return config::GetFloat("afr_rendering", 0.f) > 0.5f; }         // D-241
+bool Motion() { return config::GetFloat("motion_controls", 1.f) > 0.5f; }    // D-244 (fp::MotionControls reads it)
 
 void Apply(Action a) {
     switch (a) {
@@ -91,6 +94,12 @@ void Apply(Action a) {
         case kFinisherTp: config::SetFloat("finisher_third_person", 1.f); break;
         case kAfrOn: config::SetFloat("afr_rendering", 1.f); break;
         case kAfrOff: config::SetFloat("afr_rendering", 0.f); break;
+        case kMotionOn: config::SetFloat("motion_controls", 1.f); break;
+        case kMotionOff: config::SetFloat("motion_controls", 0.f); break;
+        case kF1On: fp::SetGameplayFP(true); break;    // D-253 (the same switch as O / B at the head, D-252)
+        case kF1Off: fp::SetGameplayFP(false); break;
+        case kF3On: fp::SetCutsceneFP(true); break;
+        case kF3Off: fp::SetCutsceneFP(false); break;
         case kVrOn: break;  // (VR is on while the panel shows)
         case kVrOff: diag::RequestVr(false); break;  // as F9 - F9 turns it back on
         case kSizeDown:
@@ -115,11 +124,11 @@ void Apply(Action a) {
     }
     g_needDraw = true;
     Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f%s, finishers %s, "
-        "rendering %s", (int)a,
+        "rendering %s, motion controls %s", (int)a,
         Snap() ? "snap" : "smooth", config::GetFloat("turn_speed", 1.f) * 100.f,
         config::GetFloat("snap_turn_degrees", 45.f), input::PadMode() ? "PlayStation" : "Xbox", Walls() ? "on" : "off",
         config::GetFloat("render_size", 2048.f), frame::AutoRenderSize() ? " (auto)" : "",
-        FinisherTp() ? "third person" : "first person", Afr() ? "AFR" : "native");
+        FinisherTp() ? "third person" : "first person", Afr() ? "AFR" : "native", Motion() ? "on" : "off");
 }
 
 bool MakeSurface() {
@@ -169,48 +178,60 @@ void Text(const wchar_t* s, RECT r, HFONT f, COLORREF c, UINT fmt) {
 }
 
 void AddButton(int x, int y, int w, int h, Action a, const wchar_t* text, bool selected) {
-    if (g_nButtons < 16) g_buttons[g_nButtons++] = {{x, y, x + w, y + h}, a, text, selected};
+    if (g_nButtons < 24) g_buttons[g_nButtons++] = {{x, y, x + w, y + h}, a, text, selected};
 }
 
-// The rows: label, then two choices or a - value + stepper
+// D-253 (owner: "add First Person (walking) and First Person (cutscenes) on / off, and reorder the VR settings - it's all
+// over the place; rendering methods next to each other, no labels needed"): one row table - first person (walking,
+// cutscenes, finishers, motion controls, walls, turning), the controller buttons, the picture (size, rendering), VR.
+// A row is a label, then two choices or "- value +"
+struct Row {
+    const wchar_t* label;
+    Action a, b;            // the two choices, or the stepper's down / up
+    const wchar_t *ta, *tb; // their texts (nullptr: a stepper)
+    bool selA;              // the first choice is the selected one (two choices only)
+    int value;              // stepper: 0 = turning step, 1 = picture size
+};
+int Rows(Row* r) {
+    const bool snap = Snap();
+    int n = 0;
+    r[n++] = {L"First person (walking)", kF1On, kF1Off, L"On", L"Off", fp::GameplayFP(), 0};
+    r[n++] = {L"First person (cutscenes)", kF3On, kF3Off, L"On", L"Off", fp::CutsceneFP(), 0};
+    r[n++] = {L"Finishers perspective", kFinisherFp, kFinisherTp, L"First person", L"Third person", !FinisherTp(), 0};
+    r[n++] = {L"Motion controls (first person)", kMotionOn, kMotionOff, L"On", L"Off", Motion(), 0};
+    r[n++] = {L"Wall collision (first person)", kWallsOn, kWallsOff, L"On", L"Off", Walls(), 0};
+    r[n++] = {L"Turning (first person)", kTurnSmooth, kTurnSnap, L"Smooth", L"Snap", !snap, 0};
+    r[n++] = {snap ? L"Snap angle" : L"Turning speed", kStepDown, kStepUp, nullptr, nullptr, false, 0};
+    r[n++] = {L"Controller buttons", kPadXbox, kPadPs, L"Xbox", L"PlayStation", input::PadMode() == 0, 0};
+    r[n++] = {L"VR picture size (per eye)", kSizeDown, kSizeUp, nullptr, nullptr, false, 1};
+    r[n++] = {L"Rendering method", kAfrOff, kAfrOn, L"Native", L"AFR", !Afr(), 0};
+    r[n++] = {L"VR on / off  (Crashing during cutscene)", kVrOn, kVrOff, L"On", L"Off", true, 0};  // only shown in VR
+    return n;
+}
+constexpr int kMaxRows = 11;
+
 void Layout(wchar_t* stepText, wchar_t* sizeText) {
     g_nButtons = 0;
-    const bool snap = Snap();
-    int y = 130 + 52;
-    AddButton(40, y, 440, 72, kTurnSmooth, L"Smooth", !snap);
-    AddButton(520, y, 440, 72, kTurnSnap, L"Snap", snap);
-    y += 140;
-    AddButton(40, y, 140, 72, kStepDown, L"\x2212", false);
-    AddButton(820, y, 140, 72, kStepUp, L"+", false);
-    if (snap) swprintf_s(stepText, 32, L"%.0f\x00b0", config::GetFloat("snap_turn_degrees", 45.f));
+    Row rows[16];
+    const int n = Rows(rows);
+    for (int i = 0; i < n; ++i) {
+        const Row& r = rows[i];
+        const int y = kTop + i * kRow + 48;
+        if (r.ta) {
+            AddButton(40, y, 440, 68, r.a, r.ta, r.selA);
+            AddButton(520, y, 440, 68, r.b, r.tb, !r.selA);
+        } else {
+            AddButton(40, y, 140, 68, r.a, L"\x2212", false);
+            AddButton(820, y, 140, 68, r.b, L"+", false);
+        }
+    }
+    if (Snap()) swprintf_s(stepText, 32, L"%.0f\x00b0", config::GetFloat("snap_turn_degrees", 45.f));
     else swprintf_s(stepText, 32, L"%.0f %%", config::GetFloat("turn_speed", 1.f) * 100.f);
-    y += 140;
-    const bool ps = input::PadMode() != 0;
-    AddButton(40, y, 440, 72, kPadXbox, L"Xbox", !ps);
-    AddButton(520, y, 440, 72, kPadPs, L"PlayStation", ps);
-    y += 140;
-    const bool walls = Walls();
-    AddButton(40, y, 440, 72, kWallsOn, L"On", walls);
-    AddButton(520, y, 440, 72, kWallsOff, L"Off", !walls);
-    y += 140;
-    AddButton(40, y, 140, 72, kSizeDown, L"\x2212", false);
-    AddButton(820, y, 140, 72, kSizeUp, L"+", false);
-    y += 140;
-    const bool tp = FinisherTp();
-    AddButton(40, y, 440, 72, kFinisherFp, L"First person", !tp);
-    AddButton(520, y, 440, 72, kFinisherTp, L"Third person", tp);
-    y += 140;
-    const bool afr = Afr();  // D-241 (owner: "Rendering Method": Native / AFR)
-    AddButton(40, y, 440, 72, kAfrOff, L"Native", !afr);
-    AddButton(520, y, 440, 72, kAfrOn, L"AFR", afr);
-    y += 140;
-    AddButton(40, y, 440, 72, kVrOn, L"On", true);  // the panel only shows in VR
-    AddButton(520, y, 440, 72, kVrOff, L"Off", false);
     if (const int autoPx = frame::AutoRenderSize()) {
         swprintf_s(sizeText, 32, L"Auto (%d x %d)", autoPx, autoPx);
     } else {
-        const int n = (int)config::GetFloat("render_size", 2048.f);
-        swprintf_s(sizeText, 32, L"%d x %d", n, n);
+        const int px = (int)config::GetFloat("render_size", 2048.f);
+        swprintf_s(sizeText, 32, L"%d x %d", px, px);
     }
 }
 
@@ -224,16 +245,16 @@ void Draw() {
     Fill({0, 0, kW, kH}, bg);
     Fill({0, 0, kW, 100}, title);
     Text(L"VR SETTINGS", {40, 0, kW - 40, 100}, g_fTitle, white, DT_LEFT | DT_VCENTER);
-    const wchar_t* labels[] = {L"Turning (first person)", Snap() ? L"Snap angle" : L"Turning speed",
-                               L"Controller buttons", L"Wall collision (first person)", L"VR picture size (per eye)",
-                               L"Finishers Perspective", L"Rendering Method",
-                               L"VR on / off  (Crashing during cutscene)"};
-    for (int i = 0; i < 8; ++i) Text(labels[i], {40, 130 + i * 140, kW - 40, 130 + i * 140 + 48}, g_fLabel, label, DT_LEFT | DT_VCENTER);
-    // the value boxes of the two stepper rows
-    for (int row : {1, 4}) {
-        const int y = 130 + row * 140 + 52;
-        Fill({200, y, 800, y + 72}, RGB(30, 30, 32), 14);
-        Text(row == 1 ? stepText : sizeText, {200, y, 800, y + 72}, g_fButton, white, DT_CENTER | DT_VCENTER);
+    Row rows[16];
+    const int n = Rows(rows);
+    for (int i = 0; i < n; ++i) {
+        const int y = kTop + i * kRow;
+        Text(rows[i].label, {40, y, kW - 40, y + 44}, g_fLabel, label, DT_LEFT | DT_VCENTER);
+        if (!rows[i].ta) {  // the stepper's value box
+            const int by = y + 48;
+            Fill({200, by, 800, by + 68}, RGB(30, 30, 32), 14);
+            Text(rows[i].value == 1 ? sizeText : stepText, {200, by, 800, by + 68}, g_fButton, white, DT_CENTER | DT_VCENTER);
+        }
     }
     for (int i = 0; i < g_nButtons; ++i) {
         const Button& b = g_buttons[i];
@@ -241,12 +262,14 @@ void Draw() {
         Fill(b.r, b.selected ? (hv ? selectedHover : selected) : (hv ? hover : button), 14);
         Text(b.text, b.r, g_fButton, white, DT_CENTER | DT_VCENTER);
     }
-    Text(L"Point a controller at an option and pull its trigger.", {40, kH - 158, kW - 40, kH - 116}, g_fHint, hint,
+    Text(L"Point a controller at an option and pull its trigger.", {40, kH - 150, kW - 40, kH - 110}, g_fHint, hint,
          DT_LEFT | DT_VCENTER);
-    Text(L"VR off: press F9 on the keyboard to turn it back on.", {40, kH - 112, kW - 40, kH - 70}, g_fHint, hint,
+    Text(L"VR off: press F9 on the keyboard to turn it back on.", {40, kH - 106, kW - 40, kH - 66}, g_fHint, hint,
          DT_LEFT | DT_VCENTER);
-    Text(L"A new picture size takes effect when you leave the menu.", {40, kH - 66, kW - 40, kH - 24}, g_fHint, hint,
-         DT_LEFT | DT_VCENTER);
+    // D-253 (owner: "instead of the picture-size line: for a quick switch between first person cutscenes or walking
+    // press O / Y near your head") - the right upper button: PS VR2 O, Meta / Index B (D-252)
+    Text(L"Quick first-person switch: press \x25CB (PS VR2) / B near your head.", {40, kH - 62, kW - 40, kH - 22}, g_fHint,
+         hint, DT_LEFT | DT_VCENTER);
     GdiFlush();
     for (int i = 0; i < kW * kH; ++i) g_out[i] = g_bits[i] | 0xff000000u;  // GDI leaves alpha 0: opaque
 }
@@ -275,6 +298,46 @@ void Rotate(const float q[4], const float v[3], float out[3]) {
     out[2] = v[2] + w * tz + (x * ty - y * tx);
 }
 
+// D-263 (owner: "my hand was jittering even in the VR menu panel"): the pointer ray came straight from the controller
+// (the drawn hands' D-239 smoothing never covered it), and 2 m away a tremble of the hand is a jumping dot. It now goes
+// through the same One Euro filter (hand_smoothing, hand_smooth_cutoff 3 Hz, hand_smooth_beta 6): still at rest, a fast
+// sweep passes. The direction's change counts at the panel's ~2 m
+void SmoothAim(int hand, float p[3], float d[3]) {
+    static bool have[2] = {false, false};
+    static float sp[2][3], sd[2][3];
+    static LARGE_INTEGER last[2] = {}, qf{};
+    if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+    if (config::GetFloat("hand_smoothing", 1.f) < 0.5f) { have[hand] = false; return; }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    const float dt = last[hand].QuadPart ? (float)(now.QuadPart - last[hand].QuadPart) / (float)qf.QuadPart : 0.f;
+    last[hand] = now;
+    if (!have[hand] || dt <= 0.f || dt > 0.1f) {
+        memcpy(sp[hand], p, sizeof(sp[hand]));
+        memcpy(sd[hand], d, sizeof(sd[hand]));
+        have[hand] = true;
+        return;
+    }
+    static const float minCut = config::GetFloat("hand_smooth_cutoff", 3.f), beta = config::GetFloat("hand_smooth_beta", 6.f);
+    float dp2 = 0.f, dd2 = 0.f;
+    for (int i = 0; i < 3; ++i) {
+        dp2 += (p[i] - sp[hand][i]) * (p[i] - sp[hand][i]);
+        dd2 += (d[i] - sd[hand][i]) * (d[i] - sd[hand][i]);
+    }
+    const float speed = (sqrtf(dp2) + 2.f * sqrtf(dd2)) / dt;
+    const float cutoff = minCut + beta * speed;
+    const float a = 1.f / (1.f + 1.f / (6.2831853f * cutoff * dt));
+    for (int i = 0; i < 3; ++i) {
+        sp[hand][i] += (p[i] - sp[hand][i]) * a;
+        sd[hand][i] += (d[i] - sd[hand][i]) * a;
+    }
+    const float n = sqrtf(sd[hand][0] * sd[hand][0] + sd[hand][1] * sd[hand][1] + sd[hand][2] * sd[hand][2]);
+    if (n > 1e-6f)
+        for (int i = 0; i < 3; ++i) sd[hand][i] /= n;
+    memcpy(p, sp[hand], sizeof(sp[hand]));
+    memcpy(d, sd[hand], sizeof(sd[hand]));
+}
+
 }  // namespace
 
 bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, const float head[3], PanelLayer* out) {
@@ -301,14 +364,15 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
         const HandState& hs = in.hand[hand];
         bool hit = false;
         if (hs.active && hs.aimValid) {
-            float d[3];
+            float d[3], ap[3] = {hs.aim.p[0], hs.aim.p[1], hs.aim.p[2]};
             const float fwd[3] = {0.f, 0.f, -1.f};
             Rotate(hs.aim.q, fwd, d);
+            SmoothAim(hand, ap, d);  // D-263
             const float dn = d[0] * nrm[0] + d[1] * nrm[1] + d[2] * nrm[2];
             if (dn < -1e-3f) {  // pointing at the panel's front
-                const float t = ((c[0] - hs.aim.p[0]) * nrm[0] + (c[1] - hs.aim.p[1]) * nrm[1] + (c[2] - hs.aim.p[2]) * nrm[2]) / dn;
+                const float t = ((c[0] - ap[0]) * nrm[0] + (c[1] - ap[1]) * nrm[1] + (c[2] - ap[2]) * nrm[2]) / dn;
                 if (t > 0.f && t < 20.f) {
-                    const float q[3] = {hs.aim.p[0] + d[0] * t, hs.aim.p[1] + d[1] * t, hs.aim.p[2] + d[2] * t};
+                    const float q[3] = {ap[0] + d[0] * t, ap[1] + d[1] * t, ap[2] + d[2] * t};
                     const float lx = (q[0] - c[0]) * rgt[0] + (q[2] - c[2]) * rgt[2], ly = q[1] - c[1];
                     const float u = lx / kPanelW + 0.5f, v = 0.5f - ly / h;
                     if (u >= 0.f && u <= 1.f && v >= 0.f && v <= 1.f) {
@@ -337,9 +401,10 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
     }
     // redraw when a value or the hovered button changed (values: also changed with F10 / F11 or a gowvr.ini edit)
     char state[96];
-    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
+    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d %d %d %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
               config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(), Walls() ? 1 : 0,
-              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0, Afr() ? 1 : 0);
+              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0, Afr() ? 1 : 0,
+              Motion() ? 1 : 0, fp::GameplayFP() ? 1 : 0, fp::CutsceneFP() ? 1 : 0);
     if (hover != g_hover || strcmp(state, g_lastState) != 0 || g_needDraw) {
         g_hover = hover;
         strcpy_s(g_lastState, state);

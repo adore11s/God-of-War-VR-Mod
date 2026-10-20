@@ -28,5 +28,7 @@ bool DiagBodyBase(Mat4* base);
 // D-220f: a render guard met a dead / unbuilt pass (crashlog.cpp). In a cutscene with F3 on, F3 steps aside (the game's
 // own cutscene camera) until that cutscene ends - the game never builds such passes for its own camera. Any thread.
 void SuspendCutsceneFP(const char* why);
+// D-257: Kratos is at a shop (the vendor's moves) - any thread
+bool InShop();
 
 }  // namespace gowvr::fp

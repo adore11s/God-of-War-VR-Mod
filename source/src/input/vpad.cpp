@@ -31,6 +31,12 @@ std::atomic<uint64_t> g_polls{0};
 std::atomic<DWORD> g_pollThread{0};
 std::atomic<BYTE> g_gameLT{0};  // D-078: the left trigger the game last received (aiming)
 std::atomic<WORD> g_gameButtons{0};  // D-080: the buttons the game last received (L1 = block)
+// D-245 (owner: "when using mouse or gamepad I can't do head-based aiming"): the aim / look state of the devices the VR
+// mapping does not see
+std::atomic<ULONGLONG> g_extLookAt{0};   // a physical pad's right stick or the mouse turned the camera
+std::atomic<uint8_t> g_realPsL2{0};      // a real PlayStation pad's L2 (0..255)
+std::atomic<ULONGLONG> g_realPsAt{0};
+void NoteLook(float deflection) { if (deflection > 0.25f) g_extLookAt = GetTickCount64(); }
 
 SHORT Axis(float v) {
     if (v > 1.f) v = 1.f;
@@ -51,6 +57,7 @@ std::atomic<int> g_padMode{0};       // 0 Xbox, 1 PlayStation
 std::atomic<bool> g_psEverOn{false};  // the virtual PlayStation pad was used this session (stays connected, neutral)
 std::atomic<bool> g_psUnavailable{false};  // libScePad imports not all found: Xbox only
 bool PsMode() { return g_padMode.load(std::memory_order_relaxed) == 1; }
+std::atomic<bool> g_hudTouch{false};       // D-262
 std::atomic<int> g_psHandle{-1};  // the game's handle of user 1's PlayStation pad (real, or the mod's virtual one)
 // the PlayStation mode takes the pads from XInput only once the game has opened its PlayStation pad (it reads it then);
 // before / without that (libScePad not initialised) XInput stays the game's pad - never no input at all
@@ -92,6 +99,8 @@ DWORD MergeState(DWORD user, XINPUT_STATE* st, DWORD rc) {
     DWORD tid = GetCurrentThreadId();
     if (g_pollThread.exchange(tid) != tid && n < 50) Log("vpad: XInputGetState polled user=%lu rc=%lu thread=%lu", user, rc, tid);
     if (user != 0 || !st) return rc;
+    if (rc == ERROR_SUCCESS)  // D-245: a real pad's right stick, before the VR pad is merged in
+        NoteLook(fmaxf(fabsf(st->Gamepad.sThumbRX / 32767.f), fabsf(st->Gamepad.sThumbRY / 32767.f)));
     std::lock_guard<std::mutex> lk(g_mu);
     if (PsActive()) {
         // D-111: the pads go to the game through its PlayStation pad (hk_scePadRead); XInput user 0 stays connected but
@@ -290,10 +299,19 @@ int hk_scePadRead(int h, void* data, int count) {
     }
     g_psEverOn = true;
     int n = fake ? 0 : o_scePadRead(h, data, count);
+    if (n > 0) {  // D-245: the real PlayStation pad's own right stick (+6 / +7, 128 centre) and L2 (+8)
+        const uint8_t* s = (const uint8_t*)data + (size_t)(n - 1) * kPsSample;
+        NoteLook(fmaxf(fabsf(s[6] - 128.f), fabsf(s[7] - 128.f)) / 127.f);
+        g_realPsL2 = s[8];
+        g_realPsAt = GetTickCount64();
+    }
     XINPUT_GAMEPAD g{};
     {
         XINPUT_STATE xs{};
-        if (o_GetState && o_GetState(0, &xs) == ERROR_SUCCESS) g = xs.Gamepad;  // a real Xbox pad merges in
+        if (o_GetState && o_GetState(0, &xs) == ERROR_SUCCESS) {  // a real Xbox pad merges in
+            g = xs.Gamepad;
+            NoteLook(fmaxf(fabsf(g.sThumbRX / 32767.f), fabsf(g.sThumbRY / 32767.f)));  // D-245
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (g_enabled) BuildPad(g);
         else {
@@ -306,6 +324,19 @@ int hk_scePadRead(int h, void* data, int count) {
         n = 1;
     }
     for (int i = 0; i < n; ++i) PsMerge((uint8_t*)data + (size_t)i * kPsSample, g);
+    // D-262: the HUD peek as a finger resting on the touchpad - the sample's touch data (+0x34 count, +0x3c / +0x3e x / y,
+    // +0x40 id; STATIC sub_14057b990 turns a count > 0 into the pad's FingerOnTouchpad, the touchpad 1920 x 943 by
+    // default) - so the game's Touch combat HUD comes up its own way (timer 0x141079150, EVT_TOUCH_STARTED / _ENDED)
+    if (g_hudTouch.load()) {
+        for (int i = 0; i < n; ++i) {
+            uint8_t* s = (uint8_t*)data + (size_t)i * kPsSample;
+            if (s[0x34]) continue;  // a real finger already
+            s[0x34] = 1;
+            *(uint16_t*)(s + 0x3c) = 960;
+            *(uint16_t*)(s + 0x3e) = 471;
+            s[0x40] = 0x7f;
+        }
+    }
     static std::atomic<int> logs{0};
     if (logs.fetch_add(1) < 3) Log("vpad: PlayStation pad read (handle 0x%x, %d sample(s), %s)", (unsigned)h, n, fake ? "virtual" : "real + virtual");
     return n;
@@ -391,6 +422,19 @@ FARPROC WINAPI hk_GetProcAddress(HMODULE m, LPCSTR n) {
     return r;
 }
 
+using PFN_GetRawInputData = UINT(WINAPI*)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
+PFN_GetRawInputData o_GetRawInputData = nullptr;
+UINT WINAPI hk_GetRawInputData(HRAWINPUT h, UINT cmd, LPVOID data, PUINT size, UINT header) {
+    const UINT r = o_GetRawInputData(h, cmd, data, size, header);
+    if (cmd == RID_INPUT && data && r != (UINT)-1 && r >= sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE)) {
+        const RAWINPUT* in = (const RAWINPUT*)data;
+        if (in->header.dwType == RIM_TYPEMOUSE && !(in->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) &&
+            labs(in->data.mouse.lLastX) + labs(in->data.mouse.lLastY) >= 2)
+            g_extLookAt = GetTickCount64();  // D-245: the mouse turns the camera
+    }
+    return r;
+}
+
 void InstallVirtualPad() {
     HMODULE exe = GetModuleHandleW(nullptr);
     int slots[4];
@@ -399,6 +443,9 @@ void InstallVirtualPad() {
                     PatchImportAny(exe, "api-ms-win-core-libraryloader", 0, "GetProcAddress", (void*)&hk_GetProcAddress,
                                    (void**)&o_GetProcAddress);
     const bool ok = slots[0] > 0, rs = slots[1] > 0;
+    // D-245: the mouse's movement as the game reads it (raw input) - turning the camera with the mouse
+    const bool ri = PatchImport(exe, "USER32.dll", "GetRawInputData", (void*)&hk_GetRawInputData, (void**)&o_GetRawInputData);
+    Log("vpad: raw input (mouse look) %s (D-245)", ri ? "watched" : "NOT watched");
     bool fg = PatchImport(exe, "USER32.dll", "GetForegroundWindow", (void*)&hk_GetForegroundWindow,
                           (void**)&o_GetForegroundWindow);
     Log("vpad: XInput import slots GetState=%d SetState=%d GetCapabilities=%d GetStateEx=%d, run-time lookups (GetProcAddress) "
@@ -503,7 +550,19 @@ void PlayerLeftStick(float* x, float* y) {
     *y = g_playerLY.load() / 32767.f;
 }
 float GameLeftTrigger() { return g_gameLT.load() / 255.f; }
+bool PlayerAimInput() {
+    if (GameLeftTrigger() > 0.3f) return true;  // the VR aim trigger (vrmap's latch) or an Xbox pad's LT
+    if (g_realPsL2.load() > 76 && GetTickCount64() - g_realPsAt.load() < 250) return true;  // a PlayStation pad's L2
+    static const int key = (int)config::GetFloat("aim_key", (float)VK_LCONTROL);  // owner: the keyboard aims with Left Ctrl
+    if (key <= 0 || !(GetAsyncKeyState(key) & 0x8000)) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);  // (user32's own - the game's import is the hooked one)
+    return pid == GetCurrentProcessId();
+}
+bool ExternalLookActive() { return GetTickCount64() - g_extLookAt.load() < 150; }
 bool GameBlockHeld() { return (g_gameButtons.load() & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0; }
+void SetHudTouch(bool on) { g_hudTouch = on; }
+bool HudTouchPossible() { return PsMode() && !g_psUnavailable.load() && g_psHandle.load() >= 0; }
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms) {
     std::lock_guard<std::mutex> lk(g_mu);
     g_hold = {};

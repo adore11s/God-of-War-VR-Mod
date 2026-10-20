@@ -2659,7 +2659,7 @@ static void KinkReport(const char* tag);
 // the aim trigger (left) is held on the motion controllers: an axe leaving the hand now is a throw
 static bool AimTriggerHeld() {
     const vr::InputSnapshot in = vr::XrInput();
-    return in.focused && in.hand[0].active && in.hand[0].trigger > 0.3f;
+    return (in.focused && in.hand[0].active && in.hand[0].trigger > 0.3f) || input::PlayerAimInput();  // D-245: any device
 }
 std::atomic<bool> g_axeThrown{false};
 SRWLOCK g_calmLock = SRWLOCK_INIT;
@@ -3445,12 +3445,27 @@ void FixAttached(uint8_t* skel, Attached& at, const float* root, uintptr_t calle
                 Log("fp: %s held differently during a move (offset %.3f %.3f %.3f) - kept until it leaves the hand", at.name,
                     at.offset.m[3][0], at.offset.m[3][1], at.offset.m[3][2]);
             at.tempGrip = true;
-        } else {
+        } else if (!at.calibrated) {
             at.baseOffset = at.offset;
             at.haveBase = true;
             at.tempGrip = false;
-            if (!at.calibrated) at.dirty = true;
+            at.dirty = true;
             at.calibrated = true;
+        } else {
+            // D-249 (owner: "the mod can learn a bad axe position - sometimes backwards, sometimes a bit too high - when
+            // switching from third to first person"; owner log: "axe grip back to normal (offset 0.030 0.143 -0.114)",
+            // later "(0.041 0.079 -0.003)" - gowvr.ini holds 0.032 0.073 0.046): every still third-person frame that was
+            // not a special move re-learned the NORMAL grip - aiming, guard stances, the fight's idles hold the axe their
+            // own way, and F1 then put that on the controller hand. Once calibrated (gowvr.ini / the release's grip, or
+            // the first learned one) the normal grip stays as it is; poses seen later only describe themselves
+            at.tempGrip = false;
+            static int differ = 0;
+            const float ox = at.offset.m[3][0] - at.baseOffset.m[3][0], oy = at.offset.m[3][1] - at.baseOffset.m[3][1],
+                        oz = at.offset.m[3][2] - at.baseOffset.m[3][2];
+            if (ox * ox + oy * oy + oz * oz > 0.03f * 0.03f && differ++ < 10)
+                Log("fp: %s held differently in third person (offset %.3f %.3f %.3f) - the normal grip kept (%.3f %.3f %.3f) "
+                    "(D-249)", at.name, at.offset.m[3][0], at.offset.m[3][1], at.offset.m[3][2], at.baseOffset.m[3][0],
+                    at.baseOffset.m[3][1], at.baseOffset.m[3][2]);
         }
     } else if (ik && !at.calibrated && learnable && (still || !at.haveOffset)) {  // provisional until an authored sample
         at.offset = Mul(R, RigidInverse(anim));
@@ -3478,7 +3493,80 @@ void FixAttached(uint8_t* skel, Attached& at, const float* root, uintptr_t calle
     // the normal grip (D-150 / D-208 / D-212 keep learning, but never place with a temporary grip)
     const Mat4 O = at.hand == 1 && at.haveBase ? at.baseOffset : at.offset;
     ReleaseSRWLockExclusive(&at.lock);
-    if (!ik) return;  // authored arm: leave the game's placement alone
+    if (!ik) {  // authored arm: the game's placement - on the DRAWN hand
+        // D-250 (owner: "in first person without motion controls, standing or moving with the axe it flickers - bad
+        // place, then good, every second; not while fighting"): with the arm from the animation the object stayed where
+        // the game put it - in the GAME body's hand - while F1 draws Kratos turned / shifted after the head (body follows
+        // the head, the eye shift): the axe hung off the drawn hand by however far the two bodies were apart at the
+        // moment (in attacks the drawn body is the game's, so they agree). The game's placement is now carried by the
+        // drawn hand's offset from the game's hand: the same anchor joint from the animation alone (AnimatedJoint - the
+        // game body) and as drawn (the published pose). Identity when the bodies agree; fresh passes only (a rebuild pass
+        // feeds the moved cache back in)
+        if (fresh && FpMode() == 1) {
+            const int ai = FindJointByHash(at.anchorHash);
+            Mat4 ag{};
+            if (ai >= 0 && AnimatedJoint(ai, &ag)) {
+                const Mat4 carry = Mul(AffineInverse(ag), anim);
+                // D-261 (owner: "still the axe does the flickering and two copies fighting at the same rate with no motion
+                // controls"): the gap was carry's translation - but carry maps WORLD to world, and the world origin is
+                // ~700 m away (owner log: Kratos at -265 58 -646), so with the drawn body turned after the head by more
+                // than ~0.2 deg against the game's (owner log: "body 5.3 deg, view 10.0 deg, game 16.2 deg") it read
+                // 2 sin(angle / 2) x 700 m and passed the 2.5 m limit: no carry, the axe drawn in the GAME body's hand -
+                // which stays where first person started while the drawn Kratos turns with the head - in the passes that
+                // had it there, on the drawn hand in the others. The gap is now how far apart the two hands are
+                const float gx0 = anim.m[3][0] - ag.m[3][0], gy0 = anim.m[3][1] - ag.m[3][1], gz0 = anim.m[3][2] - ag.m[3][2];
+                const float t = sqrtf(gx0 * gx0 + gy0 * gy0 + gz0 * gz0);
+                const float sAg = ag.m[0][0] * ag.m[0][0] + ag.m[0][1] * ag.m[0][1] + ag.m[0][2] * ag.m[0][2];
+                // D-256 (owner, D-254 build: "the axe without motion controls still flickers a little, less"): the carry
+                // is relative, so it must only meet a pass that has the axe on the GAME's hand. The axe hangs from
+                // Kratos' attach joint, and a pass built from the hero's cache - already the drawn body - has it on the
+                // drawn hand: carried again it went twice the gap. A pass is carried only when its root is nearer the
+                // game's hand than the drawn hand (as the gem joints judge it, D-176)
+                const float* Rp = (at.hand == 1 && t_axeGlued ? t_axeGameRoot : R).m[3];
+                const float gx = Rp[0] - ag.m[3][0], gy2 = Rp[1] - ag.m[3][1], gz = Rp[2] - ag.m[3][2];
+                const float hx = Rp[0] - anim.m[3][0], hy = Rp[1] - anim.m[3][1], hz = Rp[2] - anim.m[3][2];
+                const bool onGameHand = gx * gx + gy2 * gy2 + gz * gz + 0.0004f < hx * hx + hy * hy + hz * hz;  // 2 cm margin
+                static uint64_t onDrawnSkips = 0;
+                if (!onGameHand && ++onDrawnSkips <= 3)
+                    Log("fp: %s pass already on the drawn hand - not carried again (D-256)", at.name);
+                {   // D-261 evidence: per 10 s, the passes carried / already on the drawn hand / hands too far apart
+                    static std::atomic<uint32_t> nCarry{0}, nDrawn{0}, nFar{0};
+                    static std::atomic<ULONGLONG> tSum{0};
+                    (!onGameHand ? nDrawn : sAg > 0.25f && t < 2.5f ? nCarry : nFar).fetch_add(1);
+                    const ULONGLONG nowS = GetTickCount64();
+                    ULONGLONG t0 = tSum.load();
+                    if (!t0) tSum = nowS;
+                    else if (nowS - t0 >= 10000 && tSum.compare_exchange_strong(t0, nowS))
+                        Log("fp: no motion controls, 10 s - object passes carried onto the drawn hand %u, already on it %u, "
+                            "hands too far apart %u (last gap %.2f m) (D-261)", nCarry.exchange(0), nDrawn.exchange(0),
+                            nFar.exchange(0), t);
+                }
+                if (onGameHand && sAg > 0.25f && t < 2.5f) {
+                    for (int j = 0; j < n; ++j) {
+                        Mat4* w = (Mat4*)(mats + ((size_t)(uint16_t)n + j) * 0x40);
+                        *w = Mul(*w, carry);
+                    }
+                    // D-254 (owner: "in first person without motion controls I see two copies of the axe fighting for
+                    // visibility - one stable, where I started first person, the other where the axe should be - an
+                    // old bug from the axe flames fix"): the effects on the axe (flames, glows - D-061 / D-096) and the
+                    // other readers follow the drawn axe through the game axe -> drawn axe correction, which only the
+                    // motion-controlled placement recorded; here none was recorded, so they stayed on the GAME's axe
+                    // (the game body's hand - left where first person started while the drawn Kratos follows the head)
+                    if (at.hand == 1) {
+                        const Mat4 Rg = t_axeGlued ? t_axeGameRoot : R;
+                        Mat4 Rgame = Rg;
+                        Rgame.m[3][0] -= t_ghostShift[0];
+                        Rgame.m[3][2] -= t_ghostShift[1];
+                        RecordAxeCorrection(Rgame, Mul(Rg, carry));
+                    }
+                    static int carried = 0;
+                    if (carried++ < 3)
+                        Log("fp: %s carried with the drawn hand (arm from the animation, bodies %.2f m apart) (D-250)", at.name, t);
+                }
+            }
+        }
+        return;
+    }
     // D-088 (owner: "move the axe in the hand a tiny bit backwards, it overlaps one of the fingers"): an offset in the IK
     // hand's frame (x outward, y along the fingers, z up - as blades_grip_x/y/z): axe_grip_y -0.015 m = 1.5 cm back
     // toward the wrist; gowvr.ini axe_grip_x / _y / _z

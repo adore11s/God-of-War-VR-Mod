@@ -54,6 +54,8 @@ bool AimReticleDisplay(float* srcU, float* srcV, float* srcR, float* dstU, float
 float UiVerticalFix(float frameAspect);
 // The game's pause menu is open (its inPauseMenu byte, latched at view A's update) - the VR settings panel shows then
 bool PauseMenuOpen();
+// D-271: how many loading screens (Kratos not posed) have ended this session - 1+ = a save has been loaded
+int LoadsFinished();
 // VR check line (log): UI view updates scaled / skipped and why, and the flat 2D screen's state and signals
 void UiDiagText(char* out, size_t n);
 float UiScaleCurrent();   // D-104: the sharp HUD scale now (ui_scale / ui_scale_fp in F1 F3; "uiscale", "uiscalefp")

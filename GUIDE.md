@@ -39,6 +39,7 @@ Everything beyond the basics in the [README](README.md).
 | Frame rate limit | Off | A cap below the headset's refresh rate makes VR judder |
 | Motion blur | 0 | It smears with every head movement |
 | DLSS (NVIDIA cards) | **On** | Recommended: sharp, stable edges and better performance |
+| NVIDIA Reflex Low Latency (with DLSS) | On + Boost, latency markers and latency flash on | Less delay between your input and the picture |
 | HDR | Off | The headset picture is made from the normal (SDR) picture |
 
 Also recommended:
@@ -81,9 +82,11 @@ These work while the game window or a SteamVR window is in front.
 | Right stick click | Lock on |
 | Right stick click **+ push** | D-pad: left = Blades, right = sheathe, up = arrow type, down = quick turn |
 | Both stick clicks together | Spartan Rage |
-| Right trigger **next to your head** | First person on / off; **hold** it there for first person in cutscenes |
+| ○ (PS VR2) / B (Meta, Index) **next to your head** | First person on / off - for gameplay while walking, for cutscenes during a cutscene |
 
 **Menus:** tap all four face buttons together (Meta: A X Y B, PlayStation: ✕ ○ □ △) for Options / ☰ (the three-lines button); hold them for the game menu (map, skills, inventory). On Meta Quest the left controller's ☰ button is Options / ☰ too. In the game's settings menu the VR settings panel appears next to it. On Valve Index you can also squeeze the trackpads.
+
+**Arrow buttons in menus:** on the pause menu, settings and other menu screens, pushing a stick also presses the arrow (D-pad) that way - the right stick in all four directions, the left stick left / right. This works on every VR controller.
 
 ### First person: motion controls
 
@@ -101,7 +104,7 @@ These work while the game window or a SteamVR window is in front.
 | Either hand's grip over your right shoulder | Equip / put away the axe |
 | Right grip, or the left upper button (△ / Y), after a throw | Recall the axe |
 | Close your left hand (grip) | Shield |
-| Hold your left hand next to your head | Show your health, Spartan Rage and runic bars (first person hides them) |
+| Hold your left hand next to or over your head (grip released) | Show your health, Spartan Rage and runic bars, bigger and nearer the middle (first person hides them, in fights too). Works best in PlayStation button mode (F11) |
 
 ---
 
@@ -119,6 +122,7 @@ Most useful settings:
 |---|---|---|
 | `autovr` | 1 | 0 = start flat and press F9 for VR |
 | `ui_scale` / `ui_scale_fp` | 0.35 / 0.5 | HUD size in third / first person |
+| `ui_size` | 0.75 | Overall HUD size on top of those (1 = the older, bigger HUD). The shop's screens keep their size |
 | `pad_mode` | 0 | 0 = Xbox icons, 1 = PlayStation icons (F10 / F11 change it) |
 | `rumble_strength` | 1.0 | Controller rumble strength (0 = off) |
 | `screen_dist` / `screen_width` | 2.2 / 3.4 | Distance and size of the floating screen, in metres |
@@ -126,12 +130,20 @@ Most useful settings:
 | `render_size_auto` | 1 | The picture size matches what the headset asks for ("Auto" in the VR settings panel). 0 = use `render_size` |
 | `turn_snap` / `turn_speed` / `snap_turn_degrees` | 0 / 1.0 / 45 | First-person turning: smooth at a speed, or snap turns |
 | `walls_f1` | 1 | 0 = no wall collision in first person |
-| `finisher_third_person` | 0 | 1 = finishers play in third person (the game's own camera) instead of first person |
+| `finisher_third_person` | 1 | Finishers play in third person (the game's own camera). 0 = in first person |
+| `first_person_walking` / `first_person_cutscenes` | 1 / 0 | First person while walking / in cutscenes when the game starts (after your save has loaded). Switching in game saves them |
 | `hud_layer` | 1 | 0 = the HUD drawn into the game's picture (less sharp), as before |
 | `xr_loader` | 1 | 0 = start the VR runtime directly instead of through the official OpenXR loader (only if VR stopped starting) |
 | `xr_dither` | 1 | 0 = no dithering of the picture into the headset (dark gradients may band) |
 | `afr_rendering` | 0 | 1 = AFR: one eye per frame, the eyes alternating (faster; "Rendering Method" in the VR settings panel) |
-| `hand_smoothing` | 1 | Smooths small hand jitter (fast moves are not slowed). 0 = off |
+| `motion_controls` | 1 | First person: 0 = no motion controls - the controllers work like a gamepad, attacks play their normal animations ("Motion controls" in the VR settings panel) |
+| `aim_key` | 162 | The keyboard key that aims (Windows key code; 162 = Left Ctrl), for head-based aiming with a keyboard |
+| `hud_layer_head_aligned` | 1 | The menus / HUD straight ahead of both eyes (fixes double menus on Pimax). 0 = per eye, as before |
+| `hud_peek_zoom` / `hud_peek_pull` | 1.3 / 0.35 | First person, left hand at your head: how much bigger the health / Rage / runic bars get, and how far they move from the corners toward the middle (0 = not at all). `hud_peek_move` 0 leaves them in the corners |
+| `hud_obj_right` / `hud_obj_down` | 0.07 / 0.07 | First person: how far the objective (top left of the HUD) moves toward the middle, as a share of the HUD's width / height. `hud_obj_move` 0 leaves it in the corner |
+| `low_health_vignette` | 1 | At 20 % health or less (`low_health_frac` 0.2), red edges around your whole view in the headset (the game's low-health warning, made visible in VR). 0 = off; `low_health_alpha` (0.5) sets how strong, `low_health_inner_deg` / `low_health_outer_deg` (16 / 40) where it starts / is strongest; `low_health_test` 1 shows it at any health to try it |
+| `f1_combat_hud` | 2 | The health / Rage / runic bars in first person: 2 = hidden until your left hand is at your head (the game's "Touch"), 0 = always hidden, 1 = always shown. Third person keeps your own setting from the game's menu |
+| `hand_smoothing` | 1 | Smooths small hand jitter in first person and the VR settings panel's pointer (fast moves are not slowed). 0 = off |
 | `fist_on_y` | 1 | Controllers without finger sensing (Meta Quest): hold Y for fists. 0 = a light squeeze of the right grip |
 | `hit_reaction_freeze` | 1 | First person: Kratos' body and your view stay still when he is hit. 0 = off |
 | `dlss_fixes_auto` | 1 | The DLSS stereo fixes follow the game's DLSS setting. 0 = always on |
@@ -174,7 +186,7 @@ Nothing in the game is replaced or patched on disk.
 Edit `gowvr.ini` next to `GoW.exe`, then restart the game:
 - `screen_width` - width of the floating screen for menus and videos, in metres (default 3.4; try 2.4).
 - `screen_dist` - how far away that screen is, in metres (default 2.2; further away looks smaller).
-- `ui_scale` / `ui_scale_fp` - size of the HUD and captions in third / first person (defaults 0.35 / 0.5).
+- `ui_scale` / `ui_scale_fp` - size of the HUD and captions in third / first person (defaults 0.35 / 0.5), times `ui_size` (0.75; not the shop's screens).
 
 **Kratos' hands don't match your controllers (tilted, turned or twisted)**
 In first person press **F5 / F6** to tilt the hands down / up, **Ctrl + F5 / F6** to turn them and **Shift + F5 / F6** to roll (twist) them. The values are saved in `gowvr.ini` for your headset type.

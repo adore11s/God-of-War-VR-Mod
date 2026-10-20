@@ -92,6 +92,7 @@
 {0x14105a000ull, 2, 0, 0, 0, ".data"},  // src\diag\cmd.cpp, src\stereo\r1.cpp
 {0x14105ee04ull, 1, 2, 7, 0, "6b 1d ?? ?? ?? ?? 68 ba 40 00 00 00"},  // src\diag\crashlog.cpp
 {0x141078febull, 1, 2, 6, 0, "88 0d ?? ?? ?? ?? c1 e8 14 24 03 75 ??"},  // src\diag\cmd.cpp, src\stereo\mutate.cpp
+{0x141079150ull, 1, 2, 6, 0, "89 35 ?? ?? ?? ?? eb ?? 32 db 48 8b c8"},  // src\stereo\mutate.cpp
 {0x141188b50ull, 1, 2, 6, 0, "28 05 ?? ?? ?? ?? 0f 11 86 00 02 00 00"},  // src\stereo\postfx.cpp
 {0x141188b60ull, 1, 2, 6, 0, "28 0d ?? ?? ?? ?? 0f 11 8e 10 02 00 00"},  // src\stereo\postfx.cpp
 {0x1411960d0ull, 1, 2, 6, 4, "89 05 ?? ?? ?? ?? c7 05 ?? ?? ?? ?? 00 00 80 3f c7 05 ?? ?? ?? ?? 00 00 80 3f 48 83 c4 28 c3 cc cc cc cc cc cc cc cc cc cc cc cc 48 83 ec 28"},  // src\stereo\r1.cpp

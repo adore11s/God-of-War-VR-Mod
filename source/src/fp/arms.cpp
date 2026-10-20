@@ -650,6 +650,13 @@ bool ArmsBladesFree() { return g_bladesFreeEff.load(); }
 // forearm chains stay on the forearm), while the Blades sit in the fists (not on the game's L2 moves).
 static std::atomic<float> g_flipFrom[2]{0.f, 0.f}, g_flipTo[2]{0.f, 0.f};
 static std::atomic<long long> g_flipT0[2]{0, 0};
+// D-258 (owner: "the left Blade: flip it with L3 and flip it back - make it turn back the way it came (it flipped, say,
+// 120 deg - turn 120 deg back, not 240 the other way); the right Blade already works"): the turn axis is built from the
+// handle's direction, whose sign is not pinned - on the left Blade it came out reversed while the Blade was upside down,
+// and 180 -> 0 about the reversed axis is the long way round. The axis is now remembered in the WRIST's frame when a flip
+// starts from the normal grip and kept for the whole round trip (the flip back retraces the path)
+static V3 g_flipAxisLocal[2];
+static std::atomic<bool> g_flipAxisHave[2]{false, false};
 static double QpcMs() {
     static LARGE_INTEGER f{};
     if (!f.QuadPart) QueryPerformanceFrequency(&f);
@@ -673,13 +680,14 @@ void ArmsBladeFlip(int hand) {
     const float cur = FlipAngleDeg(hand);
     const bool toReversed = g_flipTo[hand].load() < 90.f;  // where it was heading: normal -> now upside down, and back
     const float to = toReversed ? 180.f : 0.f;
+    if (toReversed && fabsf(cur) < 1.f) g_flipAxisHave[hand] = false;  // D-258: a new round trip - take its axis anew
     g_flipFrom[hand] = cur;
     g_flipTo[hand] = to;
     g_flipT0[hand] = (long long)QpcMs();
     Log("arms: %s Blade flipped -> %s", hand ? "right" : "left", toReversed ? "upside down" : "normal grip");
 }
 void ArmsBladeFlipReset() {
-    for (int h = 0; h < 2; ++h) { g_flipFrom[h] = 0.f; g_flipTo[h] = 0.f; }
+    for (int h = 0; h < 2; ++h) { g_flipFrom[h] = 0.f; g_flipTo[h] = 0.f; g_flipAxisHave[h] = false; }
 }
 bool ArmsBladeFlipped() {
     for (int h = 0; h < 2; ++h)
@@ -1469,7 +1477,20 @@ void ArmsApply(uint8_t* skel) {
                                 axis = Norm(axis - hAx * Dot(axis, hAx));
                             }
                             if (Len(axis) < 0.5f) axis = Norm(Cross(hAx, Row(WA(a.wrist), 1)));
-                            if (Len(axis) > 0.5f) { flipM = RotAbout(axis, flipDeg, pivot); flipOn = true; }
+                            if (Len(axis) > 0.5f) {
+                                // D-258: the same axis (in the wrist's frame) for the whole flip and its way back
+                                const V3 w0 = Norm(Row(WA(a.wrist), 0)), w1 = Norm(Row(WA(a.wrist), 1)), w2 = Norm(Row(WA(a.wrist), 2));
+                                if (!g_flipAxisHave[h].load()) {
+                                    g_flipAxisLocal[h] = V3{Dot(axis, w0), Dot(axis, w1), Dot(axis, w2)};
+                                    g_flipAxisHave[h] = true;
+                                } else {
+                                    const V3& l = g_flipAxisLocal[h];
+                                    const V3 kept = Norm(w0 * l.x + w1 * l.y + w2 * l.z);
+                                    if (Len(kept) > 0.5f) axis = kept;
+                                }
+                                flipM = RotAbout(axis, flipDeg, pivot);
+                                flipOn = true;
+                            }
                         }
                     }
                     for (int k = 0; k < nHeld; ++k) {
@@ -1624,7 +1645,8 @@ void ArmsUpdate(bool active, const Mat4* handWorld /*[2] or null*/, const bool* 
         // D-097: an interaction with both hands on something (doors, chests, carrying the boar / Atreus, the ogre ride ...)
         // hands both arms back to the animation through the same blend as ANIMATE moves
         const bool ctxBoth = ContextHandAuthored(0) && ContextHandAuthored(1);
-        const float target = CombatArmsFromAnimation() || ctxBoth ? 0.f : 1.f, w = g_ikWeight.load();
+        // D-244: motion controls off - the arms blend to the animation (as in an ANIMATE move) and stay there
+        const float target = CombatArmsFromAnimation() || ctxBoth || !MotionControls() ? 0.f : 1.f, w = g_ikWeight.load();
         const float step = dt / fmaxf(blendMs, 1.f);
         g_ikWeight = target > w ? fminf(target, w + step) : fmaxf(target, w - step);
     }

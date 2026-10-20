@@ -14,7 +14,17 @@ void VpadEnable(bool on);
 // D-064: the left stick the game got last (all pads merged, game-camera space, -1..1), before the mod's recovery nudge
 void PlayerLeftStick(float* x, float* y);
 float GameLeftTrigger();  // D-078: the left trigger (aim) the game last received, 0..1
+// D-245: the player aims with any device - the left trigger the game receives (VR / Xbox pad), a real PlayStation pad's
+// L2, or the aim key on the keyboard (gowvr.ini aim_key, a virtual-key code, default Left Ctrl) with the game in front
+bool PlayerAimInput();
+// D-245: the camera is being turned by a device the VR mapping does not see - a physical pad's right stick or the
+// mouse (raw input) - within the last 150 ms
+bool ExternalLookActive();
 bool GameBlockHeld();     // D-080: L1 (block / shield) in the buttons the game last received
+// D-262: a finger on the PlayStation pad's touchpad while on (the game's own "Touch" combat HUD call); HudTouchPossible
+// = the game reads the mod's PlayStation pad (PlayStation mode, the pad opened)
+void SetHudTouch(bool on);
+bool HudTouchPossible();
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms);
 uint64_t VpadPolls();
 

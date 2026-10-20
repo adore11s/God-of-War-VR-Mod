@@ -9,6 +9,7 @@
 #include "movelog.h"
 #include "../stereo/headcam.h"
 #include "../stereo/eyes.h"
+#include "../stereo/mutate.h"
 #include "../core/log.h"
 #include "../core/config.h"
 #include <windows.h>
@@ -88,6 +89,9 @@ static bool ScriptedName(const char* a) {
     if (_strnicmp(a, "navbuddyboost", 13) == 0) return true;
     // D-207: the points of interest's scripted moves (poi* - e.g. poiRivBrokSonHideKratos000Enter after the shop)
     if (_strnicmp(a, "poi", 3) == 0) return true;
+    // D-248 (owner: "in the middle of the Baldur fight, the animation before Kratos picks up a tree - make that F3"): the
+    // tree-trunk sequence - attTreeBatLoop (the "R1" wait at the trunk) and attTreeBatSwing - is a scripted scene
+    if (_strnicmp(a, "atttreebat", 10) == 0) return true;
     char low[96];
     size_t i = 0;
     for (; a[i] && i + 1 < sizeof(low); ++i) low[i] = (char)tolower((unsigned char)a[i]);
@@ -134,6 +138,20 @@ static bool ScriptedScene() {
 // D-207 (owner: "in the shop make it so that even with F1 on it disables F1 temporarily while I'm in the shop"): the
 // shop's moves (envVendor* - envVendorIdle01toIdle02 / Idle02 / KratosAxeUpgrade) turn gameplay first person off (third
 // person) while they play, held 0.5 s past the last; F1 comes back on its own. gowvr.ini shop_third_person 0 = off
+// D-257: at the shop (the vendor's moves envVendor*, held 0.5 s past the last), every frame and whatever the F1 / D-207
+// settings - the UI keeps its shop size there (mutate.cpp UiScaleCurrent)
+std::atomic<bool> g_inShop{false};
+static void ShopSeenTick() {
+    static ULONGLONG lastSeen = 0;
+    char prim[96];
+    HeroPrimaryAnim(prim, sizeof(prim));
+    const char* act = ActiveMoveAnim();
+    const ULONGLONG now = GetTickCount64();
+    if ((act && _strnicmp(act, "envvendor", 9) == 0) || _strnicmp(prim, "envvendor", 9) == 0) lastSeen = now;
+    g_inShop = lastSeen && now - lastSeen < 500;
+}
+bool InShop() { return g_inShop.load(); }
+
 static bool ShopScene() {
     static const bool on = config::GetFloat("shop_third_person", 1.f) > 0.5f;
     if (!on) return false;
@@ -165,7 +183,7 @@ static bool FinisherName(const char* a) {
            _strnicmp(a, "csmamo", 6) != 0;
 }
 static bool FinisherScene() {
-    if (config::GetFloat("finisher_third_person", 0.f) < 0.5f) return false;
+    if (config::GetFloat("finisher_third_person", 1.f) < 0.5f) return false;  // D-274: third person by default
     static ULONGLONG lastSeen = 0;
     static bool logged = false;
     char prim[96];
@@ -209,6 +227,7 @@ void SuspendCutsceneFP(const char* why) {
 bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
     const bool cine = InCinematic() || ScriptedScene();
     g_sceneAnimating = cine;
+    ShopSeenTick();  // D-257
     {  // D-220f: the suspension ends with the cutscene (1 s out of it - a cut between two scenes keeps it)
         static ULONGLONG outSince = 0;
         const ULONGLONG nowT = GetTickCount64();
@@ -217,6 +236,19 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
         if (g_f3Suspended.load() && outSince && nowT - outSince > 1000) {
             g_f3Suspended = false;
             Log("fp: cutscene over - F3 back (D-220f)");
+        }
+    }
+    {   // D-271: the remembered switches, once the first load of the session is over. D-274 (owner: "the game starts with
+        // first person while walking on, first person in cutscenes off, finishers in third person"): walking on by default
+        static bool restored = false;
+        if (!restored && stereo::LoadsFinished() > 0) {
+            restored = true;
+            const bool w = config::GetFloat("first_person_walking", 1.f) > 0.5f;
+            const bool c = config::GetFloat("first_person_cutscenes", 0.f) > 0.5f;
+            g_gameplay = w;
+            g_cutscene = c;
+            Log("fp: remembered switches back after the load - first person walking %s, cutscenes %s (D-271)",
+                w ? "ON" : "off", c ? "ON" : "off");
         }
     }
     const bool want = !FinisherScene() &&
@@ -742,8 +774,20 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
     return true;
 }
 
-void SetGameplayFP(bool on) { g_gameplay = on; Log("fp: gameplay first person %s", on ? "ON" : "off"); }
-void SetCutsceneFP(bool on) { g_cutscene = on; Log("fp: cutscene first person %s", on ? "ON" : "off"); }
+// D-271 (owner: "the mod doesn't remember when I change to first person during my playthrough - I restarted and it
+// forgot"): both switches are kept in gowvr.ini (first_person_walking / first_person_cutscenes) whenever they change, and
+// come back once the first loading screen of the session ends (FirstPersonBase) - not on the title screen, whose scene
+// poses Kratos too
+void SetGameplayFP(bool on) {
+    g_gameplay = on;
+    config::SetFloat("first_person_walking", on ? 1.f : 0.f);
+    Log("fp: gameplay first person %s", on ? "ON" : "off");
+}
+void SetCutsceneFP(bool on) {
+    g_cutscene = on;
+    config::SetFloat("first_person_cutscenes", on ? 1.f : 0.f);
+    Log("fp: cutscene first person %s", on ? "ON" : "off");
+}
 bool GameplayFP() { return g_gameplay; }
 bool CutsceneFP() { return g_cutscene; }
 
