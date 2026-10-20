@@ -54,7 +54,7 @@ VR turns on by itself as soon as the game starts, and SteamVR starts with it. Us
 
 | Button / key | What it does |
 |---|---|
-| **○ (PS VR2) / B (Meta Quest, Index) next to your head** | First person on / off (gameplay while walking, cutscenes during a cutscene) |
+| **○ (PS VR2) / B (Meta Quest, Index) next to your head** | First person on / off - press it while walking for gameplay, during a cutscene for cutscenes |
 | **Tap all four face buttons** | Options / ☰ |
 | **Hold all four face buttons** | Game menu (map, skills, inventory) |
 | **F9** | VR off / on (play on your monitor, press again to go back to VR) |
