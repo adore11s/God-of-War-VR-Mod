@@ -1488,7 +1488,12 @@ void ArmsApply(uint8_t* skel) {
                                     const V3 kept = Norm(w0 * l.x + w1 * l.y + w2 * l.z);
                                     if (Len(kept) > 0.5f) axis = kept;
                                 }
-                                flipM = RotAbout(axis, flipDeg, pivot);
+                                // D-276 (owner: "the left Blade turns the wrong way from the start - the first press should
+                                // go the opposite way; only the left Blade, the right one is right"): the left hand turns
+                                // the other way round (-180 deg is the same upside-down hold; the way back retraces it).
+                                // gowvr.ini blade_flip_dir_left 1 = as before
+                                static const float leftDir = config::GetFloat("blade_flip_dir_left", -1.f) < 0.f ? -1.f : 1.f;
+                                flipM = RotAbout(axis, h == 0 ? leftDir * flipDeg : flipDeg, pivot);
                                 flipOn = true;
                             }
                         }
