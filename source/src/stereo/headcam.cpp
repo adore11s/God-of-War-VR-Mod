@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 
 namespace gowvr::stereo {
 namespace {
@@ -57,6 +58,70 @@ Mat4 FromPose(const vr::Pose& p) {
     return m;
 }
 
+// D-275 (owner, a Pimax Crystal Light player: "when the main menu shows up everything looks doubled - on my PC it looks
+// normal ... I can only play with one eye closed"; "the game looks normal on the settings menu (2D screen) and with the
+// SteamVR overlay on" - both are the flat screen): Pimax headsets report each eye's view turned outward (canted
+// displays). The eyes were rendered with their own turned orientations, but the game builds part of each frame once,
+// from view A - the mod's head camera, which took eye 0's orientation - so the other eye's lighting / shadows / screen-
+// space passes disagree with it (the double vision games show on canted headsets without "parallel projections").
+// Now, when the two eye views are turned more than 0.5 deg apart, both are rendered along the HEAD's orientation (the
+// two averaged) with each eye's frustum widened to cover its own turned one, and submitted that way - the runtime maps
+// them onto the turned displays (what Pimax's "Parallel Projections" does). Headsets with parallel views (PS VR2,
+// Quest, Index) are untouched. gowvr.ini parallel_eyes: 1 auto (default), 2 always, 0 off
+static void QMul(const float a[4], const float b[4], float o[4]) {  // (x, y, z, w)
+    o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+    o[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+    o[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+    o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+static void QRot(const float q[4], const float v[3], float o[3]) {
+    const float t[3] = {2.f * (q[1] * v[2] - q[2] * v[1]), 2.f * (q[2] * v[0] - q[0] * v[2]), 2.f * (q[0] * v[1] - q[1] * v[0])};
+    o[0] = v[0] + q[3] * t[0] + (q[1] * t[2] - q[2] * t[1]);
+    o[1] = v[1] + q[3] * t[1] + (q[2] * t[0] - q[0] * t[2]);
+    o[2] = v[2] + q[3] * t[2] + (q[0] * t[1] - q[1] * t[0]);
+}
+void ParallelViews(vr::EyeViews& v) {
+    static const int mode = (int)config::GetFloat("parallel_eyes", 1.f);
+    float a[4], b[4];
+    memcpy(a, v.pose[0].q, sizeof(a));
+    memcpy(b, v.pose[1].q, sizeof(b));
+    float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    if (dot < 0.f) { for (float& x : b) x = -x; dot = -dot; }
+    const float apart = 2.f * acosf(fminf(dot, 1.f));
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        Log("headcam: the eye views are turned %.1f deg apart%s (D-275, parallel_eyes %d)", apart * 57.2958f,
+            apart > 0.0087f ? " (canted displays) - rendered parallel, along the head" : "", mode);
+    }
+    if (mode <= 0 || (mode == 1 && apart <= 0.0087f)) return;
+    float h[4] = {a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]};
+    const float n = sqrtf(h[0] * h[0] + h[1] * h[1] + h[2] * h[2] + h[3] * h[3]);
+    if (n < 1e-6f) return;
+    for (float& x : h) x /= n;
+    const float hc[4] = {-h[0], -h[1], -h[2], h[3]};
+    for (int e = 0; e < 2; ++e) {
+        float r[4];  // eye frame -> head frame
+        QMul(hc, v.pose[e].q, r);
+        const vr::Fov f = v.fov[e];
+        const float xs[3] = {tanf(f.left), 0.f, tanf(f.right)}, ys[3] = {tanf(f.down), 0.f, tanf(f.up)};
+        float lo = 1e9f, hi = -1e9f, dn = 1e9f, up = -1e9f;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                if (i == 1 && j == 1) continue;  // the edges' corners and middles
+                const float d[3] = {xs[i], ys[j], -1.f};
+                float o[3];
+                QRot(r, d, o);
+                if (o[2] > -1e-3f) continue;  // (never for real frustums)
+                const float tx = o[0] / -o[2], ty = o[1] / -o[2];
+                lo = fminf(lo, tx); hi = fmaxf(hi, tx); dn = fminf(dn, ty); up = fmaxf(up, ty);
+            }
+        if (!(lo < hi) || !(dn < up)) continue;
+        v.fov[e] = {atanf(lo), atanf(hi), atanf(up), atanf(dn)};
+        memcpy(v.pose[e].q, h, sizeof(h));
+    }
+}
+
 void Recenter(const vr::EyeViews& v) {
     Mat4 e0 = FromPose(v.pose[0]);
     // head yaw from the back (+Z image) axis projected on the horizontal plane; head position = eye midpoint
@@ -97,6 +162,7 @@ bool HeadcamPrepare() {
             v = p;
         }
     }
+    ParallelViews(v);  // D-275 (canted displays: both eyes along the head)
     if (v.serial == g_lastSerial) ++g_stale;
     g_lastSerial = v.serial;
     // D-110: the hands for the same moment as the eyes (they were one frame older: the F1 hands trailed the head)
@@ -109,6 +175,7 @@ bool HeadcamPrepare() {
         if (g_recenterAt.valid) at = g_recenterAt;
         g_recenterAt = vr::EyeViews{};
         ReleaseSRWLockExclusive(&g_recenterLock);
+        ParallelViews(at);  // D-275: the head's yaw, not eye 0's turned one
         Recenter(at);
     }
     Mat4 d[2];

@@ -139,6 +139,7 @@ Most useful settings:
 | `motion_controls` | 1 | First person: 0 = no motion controls - the controllers work like a gamepad, attacks play their normal animations ("Motion controls" in the VR settings panel) |
 | `aim_key` | 162 | The keyboard key that aims (Windows key code; 162 = Left Ctrl), for head-based aiming with a keyboard |
 | `hud_layer_head_aligned` | 1 | The menus / HUD straight ahead of both eyes (fixes double menus on Pimax). 0 = per eye, as before |
+| `parallel_eyes` | 1 | Headsets with outward-turned displays (Pimax): both eyes are drawn parallel, like Pimax's "Parallel Projections" (fixes double vision). 2 = always, 0 = off |
 | `hud_peek_zoom` / `hud_peek_pull` | 1.3 / 0.35 | First person, left hand at your head: how much bigger the health / Rage / runic bars get, and how far they move from the corners toward the middle (0 = not at all). `hud_peek_move` 0 leaves them in the corners |
 | `hud_obj_right` / `hud_obj_down` | 0.07 / 0.07 | First person: how far the objective (top left of the HUD) moves toward the middle, as a share of the HUD's width / height. `hud_obj_move` 0 leaves it in the corner |
 | `low_health_vignette` | 1 | At 20 % health or less (`low_health_frac` 0.2), red edges around your whole view in the headset (the game's low-health warning, made visible in VR). 0 = off; `low_health_alpha` (0.5) sets how strong, `low_health_inner_deg` / `low_health_outer_deg` (16 / 40) where it starts / is strongest; `low_health_test` 1 shows it at any health to try it |
