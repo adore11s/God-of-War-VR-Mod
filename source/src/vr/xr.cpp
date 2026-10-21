@@ -102,6 +102,17 @@ uint32_t g_maxLayers = 16;  // the runtime's composition layer limit (16 is the 
 // for the VR summary in the log (LogSummary)
 char g_runtimeJson[MAX_PATH + 32] = "";  // runtime manifest + where it came from
 char g_runtimeName[192] = "";            // the runtime's own name and version
+// D-277: the headset is a Pimax (its SteamVR driver reports the system as "aapvr"; Pimax's own runtime says "Pimax")
+bool PimaxSystem() {
+    char s[256];
+    strcpy_s(s, g_systemName);
+    _strlwr_s(s);
+    return strstr(s, "aapvr") || strstr(s, "pimax");
+}
+// D-277: crop_to_eye_fov 2 (default) = on every runtime but SteamVR - and on SteamVR too for a Pimax
+bool CropToEyeFovActive(int mode) {
+    return mode == 1 || (mode == 2 && (!strstr(g_runtimeName, "SteamVR") || PimaxSystem()));
+}
 uint32_t g_eyeMaxW = 0, g_eyeMaxH = 0;   // largest eye image the runtime allows
 bool g_failed = false;  // a setup step failed: retry after g_retryAt (not every frame)
 uint64_t g_retryAt = 0;
@@ -1530,7 +1541,7 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
     {   // owner 2026-10-19: "we're doing a lot of fixes that might break something - the log must show what was on":
         // every recent fix's gowvr.ini switch, its value and whether it is active here (0 turns each one off)
         const int crop = (int)config::GetFloat("crop_to_eye_fov", 2.f);
-        const bool cropActive = crop == 1 || (crop == 2 && !strstr(g_runtimeName, "SteamVR"));
+        const bool cropActive = CropToEyeFovActive(crop);
 #ifdef GOWVR_OPENXR_LOADER
         const char* loader = config::GetFloat("xr_loader", 1.f) > 0.5f ? "official loader" : "runtime loaded directly";
 #else
@@ -1750,7 +1761,20 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     // runtime but SteamVR - SteamVR shows the wider frustum right, and its 5 deg margin (headcam.cpp) keeps black edges
     // out of a reprojected fast head turn; 1 = always, 0 = never (the rendered frustum, as before)
     static const int cropMode = (int)config::GetFloat("crop_to_eye_fov", 2.f);
-    const bool cropOn = cropMode == 1 || (cropMode == 2 && !strstr(g_runtimeName, "SteamVR"));
+    // D-277 (owner, a Pimax Crystal Light player's log after D-275: "less separation now but still not fixed"; the log:
+    // "the eye views are turned 0.0 deg apart" - SteamVR + Pimax's driver ("aapvr") reports parallel views, so D-275 did
+    // nothing; IPD 62 mm; the 2D screen fine): on SteamVR each eye went out with the mod's wider symmetric frustum (+5 deg
+    // margin), which SteamVR maps for PS VR2 / Index - Pimax's driver composites the pictures itself, and a picture
+    // whose frustum is not the eye's own is placed as if it were: each eye scaled and shifted differently = double
+    // vision with both eyes, fine with one. A Pimax now gets exactly its eyes' frustums (as for Quest Link, the 2026-10-18 crop)
+    const bool cropOn = CropToEyeFovActive(cropMode);
+    {
+        static bool logged = false;
+        if (!logged && cropOn && strstr(g_runtimeName, "SteamVR") && cropMode == 2) {
+            logged = true;
+            Log("xr: Pimax on SteamVR - each eye's picture cropped to its own frustum (D-277)");
+        }
+    }
     const bool crop = cropOn && !bb && used && used->valid && used->hasOwnFov && g_psCrop && g_cropCb;
     // D-267 (owner: "the low-health effect is drawn around the window, not part of the UI - can it be made visible? not a
     // small rectangle that follows my view; the same in first and third person"; "it comes at about 10 % health or less").
