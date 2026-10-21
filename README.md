@@ -12,7 +12,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Tested:** only the first 2 hours of the game. Later parts may break or crash.
 - **No button prompt, or the body glitches out?** The fastest fix: switch to third person and then back to first person (**○ / B next to your head** twice).
 - **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too. In menus the sticks also work as the arrow buttons (D-pad).
-- **Health and Spartan Rage bars in first person:** hidden, even in fights. Hold your **left hand next to your head** to see them.
+- **Health and Spartan Rage bars in first person:** hold your **left hand next to your head** to see them.
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
 - **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.

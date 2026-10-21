@@ -104,7 +104,7 @@ These work while the game window or a SteamVR window is in front.
 | Either hand's grip over your right shoulder | Equip / put away the axe |
 | Right grip, or the left upper button (△ / Y), after a throw | Recall the axe |
 | Close your left hand (grip) | Shield |
-| Hold your left hand next to or over your head (grip released) | Show your health, Spartan Rage and runic bars, bigger and nearer the middle (first person hides them, in fights too). Works best in PlayStation button mode (F11) |
+| Hold your left hand next to or over your head (grip released) | Show your health, Spartan Rage and runic bars, bigger and nearer the middle. Works best in PlayStation button mode (F11) |
 
 ---
 
