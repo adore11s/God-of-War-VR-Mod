@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <d3d11_1.h>
 #include <dxgi.h>
+#include <dxgi1_4.h>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -1511,7 +1512,11 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         }
         std::string line;
         for (const char* k : {"DisplayMode", "WindowWidth", "WindowHeight", "AspectRatio", "RenderScale", "DLSSQuality",
-                              "FSRQuality", "Preset", "Vsync", "MotionBlur", "HDR"})
+                              "FSRQuality", "Preset", "Vsync", "MotionBlur", "HDR",
+                              // D-282: the rays from lights reported on Quest / VDXR - the fog volume's quality and the
+                              // other detail settings in every log
+                              "AtmosphereQuality", "TextureQuality", "ModelQuality", "ShadowQuality", "ReflectionQuality",
+                              "LatencyEnable", "LatencyBoost"})
             line += std::string(" ") + k + "=" + (text.empty() ? "?" : IniValue(text, k));
         Log("summary: game settings.ini%s", text.empty() ? " (not readable)" : line.c_str());
     }
@@ -1578,6 +1583,27 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
     (void)sc;
 }
 
+// D-283 (owner: "PS2-looking textures - after a while of playing they get good quality"): the graphics card's local
+// memory in use against the budget Windows gives the game - over it, the driver moves textures out (blurry / slow until
+// they come back). Read with the VR check line (once a minute), from the game's own adapter
+void VramText(char* out, size_t n) {
+    static IDXGIAdapter3* a3 = nullptr;
+    static bool tried = false;
+    if (!tried && g_dev) {
+        tried = true;
+        IDXGIDevice* dd = nullptr;
+        IDXGIAdapter* ad = nullptr;
+        if (SUCCEEDED(g_dev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dd)) && SUCCEEDED(dd->GetAdapter(&ad)))
+            ad->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&a3);
+        if (ad) ad->Release();
+        if (dd) dd->Release();
+    }
+    DXGI_QUERY_VIDEO_MEMORY_INFO mi{};
+    if (!a3 || FAILED(a3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mi))) { sprintf_s(out, n, "video memory ?"); return; }
+    sprintf_s(out, n, "video memory %llu MB used of %llu MB budget%s", (unsigned long long)(mi.CurrentUsage >> 20),
+              (unsigned long long)(mi.Budget >> 20), mi.CurrentUsage > mi.Budget ? " - OVER (textures get moved out)" : "");
+}
+
 // While VR runs: one "VR check" line a minute for the first 30 minutes, then every 10 minutes - whether the UI scaling
 // and the flat screen actually work on this player's game (a view the mod misreads shows up here, not as an error)
 void VrCheckTick() {
@@ -1587,14 +1613,15 @@ void VrCheckTick() {
     if (!next) { next = now + 20000; return; }  // first one 20 s in (menus / intro)
     if (now < next) return;
     next = now + (++lines < 30 ? 60000 : 600000);
-    char ui[512], hud[256], rs[256];
+    char ui[512], hud[256], rs[256], vram[128];
+    VramText(vram, sizeof(vram));  // D-283
     stereo::UiDiagText(ui, sizeof(ui));
     stereo::SharpUiDiagText(hud, sizeof(hud));
     frame::RenderSizeDiagText(rs, sizeof(rs));
-    Log("VR check %d: frames to the headset %llu (flat screen %llu, flat backbuffer %llu) | %s | %s | %s | hand offsets "
+    Log("VR check %d: frames to the headset %llu (flat screen %llu, flat backbuffer %llu) | %s | %s | %s | %s | hand offsets "
         "pitch/yaw/roll psvr2 %.0f/%.0f/%.0f quest %.0f/%.0f/%.0f other %.0f/%.0f/%.0f", lines,
         (unsigned long long)g_submitted.load(), (unsigned long long)g_quadFrames.load(),
-        (unsigned long long)g_mono.load(), ui, hud, rs, config::GetFloat("wristpitch_psvr2", 35.f),
+        (unsigned long long)g_mono.load(), vram, ui, hud, rs, config::GetFloat("wristpitch_psvr2", 35.f),
         config::GetFloat("wristyaw_psvr2", 0.f), config::GetFloat("wristroll_psvr2", 0.f),
         config::GetFloat("wristpitch_quest", 25.f), config::GetFloat("wristyaw_quest", 0.f),
         config::GetFloat("wristroll_quest", 0.f), config::GetFloat("wristpitch_other", 0.f),
@@ -1916,7 +1943,69 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     const int peekFpm = fp::FpMode();
     const bool peekFirstPerson = peekFpm == 1 || peekFpm == 2;
     if (peekMove && peekFirstPerson && input::HudPeek()) peekSeen = nowMs;
-    const bool peekSplit = peekFirstPerson && peekSeen && nowMs - peekSeen <= peekLinger && g_maxLayers >= 9;
+    // D-284 (owner: "a VR settings option: head-based or hand-based UI for the health / Spartan / runic bars; hand-based
+    // shows them always on the left hand in F1"): gowvr.ini hud_bars_hand (the VR settings panel, live). In gameplay F1
+    // (not in a shop) the two bottom corner blocks of each eye's HUD picture go out as quads in the room, hand_bars_up
+    // (0.10 m) above the left controller, side by side and turned toward the eyes (readable whenever the hand is
+    // looked at), hand_bars_width (0.24 m) wide together; the rest of the HUD stays at the head. The Combat HUD is On
+    // there (mutate.cpp CombatHudTick) and the head peek is off. Hidden while the left hand is not tracked
+    const bool handMode = peekFpm == 1 && config::GetFloat("hud_bars_hand", 1.f) > 0.5f && !fp::InShop() && g_maxLayers >= 9;
+    bool handOk = false;
+    float hbC[3] = {}, hbX[3] = {};
+    XrQuaternionf hbQ{0.f, 0.f, 0.f, 1.f};
+    if (handMode && ok) {
+        Pose gp[2];
+        bool gv[2] = {false, false};
+        if (XrLocateHandsAt(g_frame.predictedDisplayTime, gp, gv) && gv[0]) {
+            static const float up = fminf(fmaxf(config::GetFloat("hand_bars_up", 0.10f), 0.f), 0.5f);
+            const float c[3] = {gp[0].p[0], gp[0].p[1] + up, gp[0].p[2]};
+            const float head[3] = {0.5f * (pv[0].pose.position.x + pv[1].pose.position.x),
+                                   0.5f * (pv[0].pose.position.y + pv[1].pose.position.y),
+                                   0.5f * (pv[0].pose.position.z + pv[1].pose.position.z)};
+            float z[3] = {head[0] - c[0], head[1] - c[1], head[2] - c[2]};  // the quad's front (+Z) toward the eyes
+            const float zn = sqrtf(z[0] * z[0] + z[1] * z[1] + z[2] * z[2]);
+            if (zn > 0.05f) {
+                for (float& v : z) v /= zn;
+                float y[3] = {-z[1] * z[0], 1.f - z[1] * z[1], -z[1] * z[2]};  // world up, made perpendicular to z
+                const float yn = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+                if (yn > 0.1f) {
+                    for (float& v : y) v /= yn;
+                    const float x[3] = {y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]};
+                    // rotation (columns x, y, z) -> quaternion
+                    const float m00 = x[0], m01 = y[0], m02 = z[0], m10 = x[1], m11 = y[1], m12 = z[1], m20 = x[2],
+                                m21 = y[2], m22 = z[2];
+                    const float tr = m00 + m11 + m22;
+                    if (tr > 0.f) {
+                        const float s = sqrtf(tr + 1.f) * 2.f;
+                        hbQ = {(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25f * s};
+                    } else if (m00 > m11 && m00 > m22) {
+                        const float s = sqrtf(1.f + m00 - m11 - m22) * 2.f;
+                        hbQ = {0.25f * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s};
+                    } else if (m11 > m22) {
+                        const float s = sqrtf(1.f + m11 - m00 - m22) * 2.f;
+                        hbQ = {(m01 + m10) / s, 0.25f * s, (m12 + m21) / s, (m02 - m20) / s};
+                    } else {
+                        const float s = sqrtf(1.f + m22 - m00 - m11) * 2.f;
+                        hbQ = {(m02 + m20) / s, (m12 + m21) / s, 0.25f * s, (m10 - m01) / s};
+                    }
+                    memcpy(hbC, c, sizeof(hbC));
+                    memcpy(hbX, x, sizeof(hbX));
+                    handOk = true;
+                }
+            }
+        }
+    }
+    {
+        static int lastHand = -1;
+        const int h = handMode ? (handOk ? 2 : 1) : 0;
+        if (h != lastHand) {
+            static int logs = 0;
+            if (logs++ < 40)
+                Log("xr: health bars %s (D-284)", h == 2 ? "on the left hand" : h == 1 ? "on the left hand - the hand is not tracked, hidden" : "at the head");
+            lastHand = h;
+        }
+    }
+    const bool peekSplit = !handMode && peekFirstPerson && peekSeen && nowMs - peekSeen <= peekLinger && g_maxLayers >= 9;
     {
         static bool wasSplit = false;
         static int splitLogs = 0;
@@ -1936,8 +2025,8 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     static const float objH = fminf(fmaxf(config::GetFloat("hud_obj_h", 0.25f), 0.05f), 0.5f);
     static const float objRight = fminf(fmaxf(config::GetFloat("hud_obj_right", 0.07f), -0.5f), 0.5f);
     static const float objDown = fminf(fmaxf(config::GetFloat("hud_obj_down", 0.07f), -0.5f), 0.5f);
-    const bool objMove = objMoveOn && peekFpm == 1 && !fp::InShop() && g_maxLayers >= (peekSplit ? 13u : 7u) &&
-                         (!peekSplit || objH < 1.f - peekH);
+    const bool objMove = objMoveOn && peekFpm == 1 && !fp::InShop() && g_maxLayers >= (peekSplit || handMode ? 13u : 7u) &&
+                         (!(peekSplit || handMode) || objH < 1.f - peekH);
     for (int e = 0; e < 2 && ok && g_psHud; ++e) {
         ID3D11ShaderResourceView* hsrv = nullptr;
         uint32_t hw = 0, hh = 0;
@@ -1947,9 +2036,17 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         static const float density = fminf(fmaxf(config::GetFloat("hud_layer_density", 1.5f), 0.5f), 4.f);
         // D-265: while the corner blocks are shown hud_peek_zoom x bigger, the copy is that much larger too - the enlarged
         // bars keep hud_layer_density texels per headset pixel (the rest of the HUD gets more, harmless)
-        const float dens = density * (peekSplit ? peekZoom : 1.f);
-        const uint32_t qw = (uint32_t)fminf((float)hw, ceilf(dens * sx * (float)g_eye[e].w));
-        const uint32_t qh = (uint32_t)fminf((float)hh, ceilf(dens * sy * (float)g_eye[e].h));
+        // D-284: on the hand the bars are seen from ~0.5 m (bigger than at the head): hand_bars_density x the texels
+        static const float handDens = fminf(fmaxf(config::GetFloat("hand_bars_density", 2.f), 1.f), 4.f);
+        const float dens = density * (peekSplit ? peekZoom : handMode ? handDens : 1.f);
+        // D-285 (a Steam Link player's log: SteamVR asked for 816 x 856 eye images - the HUD picture was 322 x 338
+        // texels, stretched up on the headset's ~2000-pixel panels): the texels follow the eye image's size, but at
+        // least hud_layer_min_eye_px (2048) across - the compositor shows the HUD at the panel's resolution, not the eye
+        // image's
+        static const float minEye = fminf(fmaxf(config::GetFloat("hud_layer_min_eye_px", 2048.f), 256.f), 8192.f);
+        const float eyeScale = (float)g_eye[e].w > 0.f ? fmaxf(1.f, minEye / (float)g_eye[e].w) : 1.f;
+        const uint32_t qw = (uint32_t)fminf((float)hw, ceilf(dens * sx * (float)g_eye[e].w * eyeScale));
+        const uint32_t qh = (uint32_t)fminf((float)hh, ceilf(dens * sy * (float)g_eye[e].h * eyeScale));
         if (qw < 16 || qh < 16 || !EnsureRtSwapchain(g_hudSc[e], hw, hh, e ? "HUD layer eye 1" : "HUD layer eye 0")) continue;
         const int idx = AcquireReady(g_hudSc[e], "HUD layer");
         if (idx < 0) continue;
@@ -1988,7 +2085,7 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
                     H * (0.5f - 0.5f * (float)(y0 + y1) / (float)qh), 1.f);
         };
         const int32_t bw = (int32_t)(peekW * (float)qw), by = (int32_t)((1.f - peekH) * (float)qh);  // D-260 corner blocks
-        const bool corners = peekSplit && bw >= 2 && by >= 2 && ih - by >= 2 && iw - 2 * bw >= 2;
+        const bool corners = (peekSplit || handMode) && bw >= 2 && by >= 2 && ih - by >= 2 && iw - 2 * bw >= 2;
         const int32_t upperEnd = corners ? by : ih;  // the bottom band is the corners' when they are moved
         const int32_t ow = (int32_t)(objW * (float)qw), oh = (int32_t)(objH * (float)qh);  // D-266 objective block
         if (objMove && ow >= 2 && oh >= 2 && iw - ow >= 2 && upperEnd - oh >= 2) {
@@ -2002,10 +2099,29 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         if (corners) {
             const float fw = (float)bw / (float)qw, fy = (float)by / (float)qh;  // block width, top of the bottom band (uv)
             addKept(bw, by, iw - bw, ih);  // the bottom middle
-            const float bwm = W * fw * peekZoom, bhm = H * (1.f - fy) * peekZoom;
-            const float cxo = 0.5f * W * (1.f - peekPull), cyo = -0.5f * H * (1.f - peekPull);  // the outer corners
-            addQuad(k++, 0, by, bw, ih, -cxo + 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);       // health / Spartan Rage
-            addQuad(k++, iw - bw, by, iw, ih, cxo - 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);  // runic
+            if (handMode) {  // D-284: the two blocks above the left hand (none while it is not tracked)
+                if (handOk) {
+                    static const float total = fminf(fmaxf(config::GetFloat("hand_bars_width", 0.24f), 0.05f), 1.f);
+                    const float gap = 0.01f, bw0 = W * fw, bh0 = H * (1.f - fy);
+                    const float kf = (total - gap) / fmaxf(2.f * bw0, 1e-4f);
+                    const float wM = bw0 * kf, hM = bh0 * kf, off = 0.5f * (wM + gap);
+                    auto addHand = [&](int32_t x0, int32_t x1, float side) {
+                        XrCompositionLayerQuad& hq = hudQ[e][k++];
+                        XrPosef pose{hbQ, {hbC[0] + hbX[0] * off * side, hbC[1] + hbX[1] * off * side, hbC[2] + hbX[2] * off * side}};
+                        hq = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u, g_space,
+                                                    e ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT,
+                                                    {g_hudSc[e].sc, {{x0, by}, {x1 - x0, ih - by}}, 0}, pose, {wM, hM}};
+                        layers[nLayers++] = (const XrBaseHeader*)&hq;
+                    };
+                    addHand(0, bw, -1.f);       // health / Spartan Rage (left)
+                    addHand(iw - bw, iw, 1.f);  // runic (right)
+                }
+            } else {
+                const float bwm = W * fw * peekZoom, bhm = H * (1.f - fy) * peekZoom;
+                const float cxo = 0.5f * W * (1.f - peekPull), cyo = -0.5f * H * (1.f - peekPull);  // the outer corners
+                addQuad(k++, 0, by, bw, ih, -cxo + 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);       // health / Spartan Rage
+                addQuad(k++, iw - bw, by, iw, ih, cxo - 0.5f * bwm, cyo + 0.5f * bhm, peekZoom);  // runic
+            }
         }
         if (++g_hudQuads <= 2 || g_hudQuads % 10000 == 0)
             Log("xr: HUD layer eye %d %ux%u of %ux%u (%.2f x %.2f m at %.0f m) #%llu", e, qw, qh, hw, hh, W, H, D,

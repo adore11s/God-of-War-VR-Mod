@@ -73,13 +73,44 @@ PFN_XInputGetState o_GetStateEx = nullptr;
 using PFN_XInputGetCapabilities = DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
 PFN_XInputGetCapabilities o_GetCaps = nullptr;
 
+// D-287 (owner, a Valve Index player: "with Xbox controls nothing works on my Index controllers - the hands move and the
+// panel pointer works, in game nothing; PlayStation fixes it"): the Xbox mode reaches the game only through its import
+// slots (XInput, and GetForegroundWindow - the game's Xbox pad reader DxPad::vfunc_3 drops every pad unless it is in
+// front; its PlayStation reader has no such check). Another module can write its own hook over ours later - Steam
+// Input does it for a game when it drives a controller it knows (the Index controllers are Steam Input devices; PS VR2
+// / Quest controllers are not) - and its virtual pad, idle while the controllers serve the mod's VR session, is all the
+// game reads. ImportWatch (1 Hz) takes such a slot back and calls that hook from ours (*Above): the game still gets
+// what that module gives, then the VR pad merged in. A call coming back into our hook from it (its saved original is
+// our hook) goes straight to the real function (t_xiDepth) - no loop, no second merge.
+enum { kAboveGetState, kAboveSetState, kAboveGetCaps, kAboveGetStateEx, kAboveFg, kAboveCount };
+std::atomic<void*> g_above[kAboveCount] = {};
+thread_local int t_xiDepth = 0;
+template <class Fn, class... A> auto CallAbove(int i, Fn real, A... a) -> decltype(real(a...)) {
+    if (Fn above = (Fn)g_above[i].load(std::memory_order_relaxed)) {
+        ++t_xiDepth;
+        const auto r = above(a...);
+        --t_xiDepth;
+        return r;
+    }
+    return real(a...);
+}
+DWORD WINAPI XiNone(DWORD, XINPUT_STATE*) { return ERROR_DEVICE_NOT_CONNECTED; }
+DWORD WINAPI XiNoCaps(DWORD, DWORD, XINPUT_CAPABILITIES*) { return ERROR_DEVICE_NOT_CONNECTED; }
+
 DWORD MergeState(DWORD user, XINPUT_STATE* st, DWORD rc);
-DWORD WINAPI hk_XInputGetState(DWORD user, XINPUT_STATE* st) { return MergeState(user, st, o_GetState(user, st)); }
+DWORD WINAPI hk_XInputGetState(DWORD user, XINPUT_STATE* st) {
+    if (t_xiDepth) return o_GetState(user, st);  // D-287: back from the hook above ours
+    return MergeState(user, st, CallAbove(kAboveGetState, o_GetState, user, st));
+}
 DWORD WINAPI hk_XInputGetStateEx(DWORD user, XINPUT_STATE* st) {
-    return MergeState(user, st, o_GetStateEx ? o_GetStateEx(user, st) : ERROR_DEVICE_NOT_CONNECTED);
+    const PFN_XInputGetState real = o_GetStateEx ? o_GetStateEx : &XiNone;
+    if (t_xiDepth) return real(user, st);
+    return MergeState(user, st, CallAbove(kAboveGetStateEx, real, user, st));
 }
 DWORD WINAPI hk_XInputGetCapabilities(DWORD user, DWORD flags, XINPUT_CAPABILITIES* c) {
-    const DWORD rc = o_GetCaps ? o_GetCaps(user, flags, c) : ERROR_DEVICE_NOT_CONNECTED;
+    const PFN_XInputGetCapabilities real = o_GetCaps ? o_GetCaps : &XiNoCaps;
+    if (t_xiDepth) return real(user, flags, c);
+    const DWORD rc = CallAbove(kAboveGetCaps, real, user, flags, c);
     if (user != 0 || rc == ERROR_SUCCESS || !c) return rc;
     {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -180,7 +211,8 @@ void SetRumble(float heavy, float light, const char* from) {
 using PFN_XInputSetState = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
 PFN_XInputSetState o_SetState = nullptr;
 DWORD WINAPI hk_XInputSetState(DWORD user, XINPUT_VIBRATION* v) {
-    DWORD rc = o_SetState(user, v);
+    if (t_xiDepth) return o_SetState(user, v);  // D-287
+    DWORD rc = CallAbove(kAboveSetState, o_SetState, user, v);
     if (user == 0 && v && !PsActive()) {
         SetRumble(v->wLeftMotorSpeed / 65535.f, v->wRightMotorSpeed / 65535.f, "Xbox pad");
         bool enabled;
@@ -381,7 +413,8 @@ std::atomic<bool> g_focusOverride{false};
 HWND WINAPI hk_GetForegroundWindow() {
     HWND game = g_gameWindow.load();
     if (g_focusOverride && game) return game;
-    return o_GetForegroundWindow();
+    if (t_xiDepth) return o_GetForegroundWindow();  // D-287
+    return CallAbove(kAboveFg, o_GetForegroundWindow);
 }
 
 }  // namespace
@@ -471,6 +504,62 @@ void InstallVirtualPad() {
     }
     g_padMode = config::GetFloat("pad_mode", 0.f) > 0.5f && !g_psUnavailable ? 1 : 0;
     Log("vpad: pad mode %s (F10 Xbox / F11 PlayStation)", PsMode() ? "PlayStation" : "Xbox");
+}
+
+// D-287: once a second (command thread) - our import slots taken back from a module that hooked over them; and once a
+// minute, while VR runs in the Xbox mode, how often the game read the pad (0 = it reads nothing: the log says so)
+void ImportWatch() {
+    HMODULE exe = GetModuleHandleW(nullptr);
+    struct W { const char* dll; uint16_t ord; const char* name; void* hook; int above; const char* what; };
+    const W w[] = {
+        {"xinput", g_xi[0].ord, g_xi[0].name, g_xi[0].hook, kAboveGetState, "XInputGetState"},
+        {"xinput", g_xi[1].ord, g_xi[1].name, g_xi[1].hook, kAboveSetState, "XInputSetState"},
+        {"xinput", g_xi[2].ord, g_xi[2].name, g_xi[2].hook, kAboveGetCaps, "XInputGetCapabilities"},
+        {"xinput", g_xi[3].ord, g_xi[3].name, g_xi[3].hook, kAboveGetStateEx, "XInputGetStateEx"},
+        {"user32", 0, "GetForegroundWindow", (void*)&hk_GetForegroundWindow, kAboveFg, "GetForegroundWindow"},
+    };
+    for (auto& a : g_above) {  // a module whose hook we call was unloaded since: not called any more
+        void* p = a.load();
+        HMODULE m = nullptr;
+        if (p && !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     (LPCSTR)p, &m)) {
+            a = nullptr;
+            Log("vpad: a hook above ours (%p) is gone - not called any more (D-287)", p);
+        }
+    }
+    for (const W& x : w) {
+        void* foreign = nullptr;
+        const int n = ReclaimImportAny(exe, x.dll, x.ord, x.name, x.hook, &foreign);
+        if (!n || !foreign) continue;
+        const bool changed = g_above[x.above].exchange(foreign) != foreign;
+        static std::atomic<int> logs{0};
+        if (changed && logs.fetch_add(1) < 20) {
+            char mod[MAX_PATH] = "?";
+            HMODULE m = nullptr;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)foreign, &m) && m)
+                GetModuleFileNameA(m, mod, MAX_PATH);
+            Log("vpad: the game's %s slot was hooked over by %s (%p) - taken back, that hook is called from ours (D-287)",
+                x.what, mod, foreign);
+        }
+    }
+    static ULONGLONG last = 0;
+    static uint64_t polls0 = 0;
+    const ULONGLONG now = GetTickCount64();
+    if (now - last < 60000) return;
+    last = now;
+    const uint64_t p = g_polls.load(), d = p - polls0;
+    polls0 = p;
+    bool enabled;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        enabled = g_enabled;
+    }
+    if (!enabled || PsActive()) return;
+    HWND fg = o_GetForegroundWindow ? o_GetForegroundWindow() : nullptr;
+    Log("vpad: Xbox pad mode - the game read the pad %llu times in the last minute%s (game window %p, in front %p, focus "
+        "override %s; D-287)", (unsigned long long)d, d ? "" : " - NOTHING reaches the game this way", (void*)g_gameWindow.load(),
+        (void*)fg, g_focusOverride.load() ? "on" : "off");
 }
 
 void SetPadMode(int mode) {

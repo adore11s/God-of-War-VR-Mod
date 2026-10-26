@@ -3173,6 +3173,40 @@ static bool ReticlePlace(uint8_t* skel, const float* root, float* out) {
             g_retMoved.exchange(0), su, sv, du, dv, k);
     return true;
 }
+// D-286 (owner: "an option in VR settings to hide the aiming icon of Kratos' axe - not Atreus' bow aiming icon"): VR
+// settings "Axe aiming icon: Hide" (gowvr.ini aim_icon_hide) - Kratos' reticle pieces (the D-149 list) are drawn far
+// outside the UI (their root moved; never a zero scale). Atreus' crosshairs stay: the hunt pieces (ret_*_minigame_*),
+// any piece while one of those was drawn in the last second, and the cinematic aim sections (the game's cinematic
+// mode - D-238, Atreus' crosshair). The switch is read 4 x a second (this runs for every object on the job threads)
+static bool AimIconHideOn() {
+    static std::atomic<ULONGLONG> at{0};
+    static std::atomic<bool> on{false};
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG t = at.load(std::memory_order_relaxed);
+    if (now - t >= 250 && at.compare_exchange_strong(t, now)) on = config::GetFloat("aim_icon_hide", 0.f) > 0.5f;
+    return on.load(std::memory_order_relaxed);
+}
+static std::atomic<ULONGLONG> g_atreusRetAt{0};
+static bool AxeReticleHide(uint8_t* skel, const float* root, float* out) {
+    if (!AimIconHideOn()) return false;
+    const int nj = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+    if (nj < 1 || nj > 64) return false;
+    const uint64_t* hh = *(const uint64_t**)(skel + 0x30);
+    if (!hh || IsBadReadPtr(hh, 8)) return false;
+    const int piece = ReticlePiece(hh[0]);
+    if (piece < 0) return false;
+    const ULONGLONG now = GetTickCount64();
+    if (piece >= 13) {  // ret_aim_minigame_* / ret_hitValid_minigame_*: Atreus' hunt
+        g_atreusRetAt.store(now, std::memory_order_relaxed);
+        return false;
+    }
+    if (InCinematic() || now - g_atreusRetAt.load(std::memory_order_relaxed) < 1000) return false;
+    memcpy(out, root, sizeof(Mat4));
+    out[12] = out[13] = 4000.f;  // UI clip x / 16, y / 9: far outside the view (set, not added - a self-fed pass stays)
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) Log("hud: the axe aiming icon is hidden ('%s' moved out of view, D-286)", kRetNames[piece]);
+    return true;
+}
 
 // ---- D-146: the sheathed axe hangs on a Kratos JOINT (static RE, reverse_engineering/src) --------------------------
 // attachment::tThrowable ctor sub_14088f810 resolves the weapon definition's OutHandJoint (+0x60) / OnBackJoint (+0x68)
@@ -6243,8 +6277,8 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         bool talismanLeft = false;  // D-229e: a talisman pass left as it is (no rule after the talisman's)
         t_ghostShift[0] = t_ghostShift[1] = 0.f;  // D-095
         t_axeGlued = false;                        // D-130: set only by this pass's back glue
-        // D-149: the aiming icon's own UI objects, while head-aiming (third person too - D-103)
-        if (root && skel && ReticlePlace(skel, root, r)) {
+        // D-149: the aiming icon's own UI objects, while head-aiming (third person too - D-103); D-286: hidden
+        if (root && skel && (AxeReticleHide(skel, root, r) || ReticlePlace(skel, root, r))) {
             o_LocalToWorld(skel, local, r, flag);
             t_passLocal = local;
             ++g_passes;

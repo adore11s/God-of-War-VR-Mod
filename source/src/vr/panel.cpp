@@ -4,10 +4,10 @@
 #include "../core/config.h"
 #include "../core/log.h"
 #include "../input/vpad.h"
-#include "../diag/cmd.h"
 #include "../frame/rendersize.h"
 #include "../stereo/mutate.h"
 #include "../fp/firstperson.h"
+#include "../fp/arms.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -17,9 +17,13 @@
 namespace gowvr::vr {
 namespace {
 
-constexpr int kW = 1000, kH = 1690;         // panel pixels (D-253: 11 rows of kRow + the hints)
-constexpr int kTop = 122, kRow = 128;      // D-253: the first row's label, the row pitch
-constexpr float kPanelW = 1.2f;             // metres (D-253: 11 rows)
+// panel pixels (D-253: 11 rows of kRow + the hints; D-283 12, D-284 13, D-286 15, D-288 16, D-289 14; D-292 13 rows and two
+// hint lines: 122 + 13 x 120 + 116)
+constexpr int kW = 1000, kH = 1798;
+// D-253: the first row's label, the row pitch (D-288: 16 rows - 120: label 40 + 4 + button 64 + 12, the panel as tall
+// as with 15 rows of 128)
+constexpr int kTop = 122, kRow = 120, kLabelH = 40, kButtonY = 44, kButtonH = 64;
+constexpr float kPanelW = 1.2f;             // metres (D-253: 11 rows; D-289: 14 rows of 120 px, as tall as 13 of 128 were)
 constexpr float kGap = 0.15f;               // between the screen and the panel
 constexpr int kCursorPx = 64;
 
@@ -29,7 +33,8 @@ const int kSizes[] = {1440, 1728, 2048, 2304, 2560, 2816};
 
 enum Action {
     kNone, kTurnSmooth, kTurnSnap, kStepDown, kStepUp, kPadXbox, kPadPs, kWallsOn, kWallsOff, kSizeDown, kSizeUp,
-    kFinisherFp, kFinisherTp, kVrOn, kVrOff, kAfrOn, kAfrOff, kMotionOn, kMotionOff, kF1On, kF1Off, kF3On, kF3Off
+    kFinisherFp, kFinisherTp, kAfrOn, kAfrOff, kMotionOn, kMotionOff, kF1On, kF1Off, kF3On, kF3Off,
+    kBarsHead, kBarsHand, kAimHold, kAimPress, kHandDown, kHandUp
 };
 struct Button { RECT r; Action a; const wchar_t* text; bool selected; };
 
@@ -42,11 +47,12 @@ uint32_t g_out[kW * kH];
 uint32_t g_cursor[kCursorPx * kCursorPx];
 bool g_cursorMade = false;
 
-Button g_buttons[24];
+// D-286: 40 (it was 24 = 12 rows: D-284's 13th row, VR on / off, had lost its buttons)
+Button g_buttons[40];
 int g_nButtons = 0;
 Action g_hover = kNone;
 bool g_needDraw = true;
-char g_lastState[96] = "";
+char g_lastState[128] = "";
 
 // pointing (render thread writes, pad thread reads)
 std::atomic<bool> g_capture[2] = {false, false};
@@ -67,6 +73,11 @@ bool Walls() { return config::GetFloat("walls_f1", 1.f) > 0.5f; }
 bool FinisherTp() { return config::GetFloat("finisher_third_person", 1.f) > 0.5f; }
 bool Afr() { return config::GetFloat("afr_rendering", 0.f) > 0.5f; }         // D-241
 bool Motion() { return config::GetFloat("motion_controls", 1.f) > 0.5f; }    // D-244 (fp::MotionControls reads it)
+// (D-289, owner: "remove the distant model detail and hide aiming icon options from VR settings" - D-283's "Distant model
+// detail" and D-286's "Axe aiming icon" rows are gone; gowvr.ini lod_scale / aim_icon_hide still work)
+// D-284 (xr.cpp, mutate.cpp read it live); D-291 (owner: "make the left hand UI default for everyone"): on by default
+bool BarsHand() { return config::GetFloat("hud_bars_hand", 1.f) > 0.5f; }
+bool AimPress() { return config::GetFloat("aim_toggle", 0.f) > 0.5f; }          // D-286 (input/vrmap.cpp)
 
 void Apply(Action a) {
     switch (a) {
@@ -96,12 +107,19 @@ void Apply(Action a) {
         case kAfrOff: config::SetFloat("afr_rendering", 0.f); break;
         case kMotionOn: config::SetFloat("motion_controls", 1.f); break;
         case kMotionOff: config::SetFloat("motion_controls", 0.f); break;
+        case kBarsHead: config::SetFloat("hud_bars_hand", 0.f); break;  // D-284
+        case kBarsHand: config::SetFloat("hud_bars_hand", 1.f); break;
+        case kAimHold:  // D-286 config::SetFloat("aim_toggle", 0.f); break;
+        case kAimPress: config::SetFloat("aim_toggle", 1.f); break;
+        // D-288 (a Meta Quest 2 player: "when I hold the axe with my hand pointing forward its top points backward, as if
+        // turned 90 degrees - maybe hand rotation offsets in the VR settings"): F5 / F6's wrist pitch for this headset's
+        // controllers (gowvr.ini wristpitch_<psvr2 | quest | other>), 5 degrees a click
+        case kHandDown: fp::ArmsAdjustPitch(-5.f); break;
+        case kHandUp: fp::ArmsAdjustPitch(5.f); break;
         case kF1On: fp::SetGameplayFP(true); break;    // D-253 (the same switch as O / B at the head, D-252)
         case kF1Off: fp::SetGameplayFP(false); break;
         case kF3On: fp::SetCutsceneFP(true); break;
         case kF3Off: fp::SetCutsceneFP(false); break;
-        case kVrOn: break;  // (VR is on while the panel shows)
-        case kVrOff: diag::RequestVr(false); break;  // as F9 - F9 turns it back on
         case kSizeDown:
         case kSizeUp: {
             // "Auto" (the size the runtime asks for, rendersize.cpp) is the step above the largest size
@@ -178,7 +196,7 @@ void Text(const wchar_t* s, RECT r, HFONT f, COLORREF c, UINT fmt) {
 }
 
 void AddButton(int x, int y, int w, int h, Action a, const wchar_t* text, bool selected) {
-    if (g_nButtons < 24) g_buttons[g_nButtons++] = {{x, y, x + w, y + h}, a, text, selected};
+    if (g_nButtons < (int)(sizeof(g_buttons) / sizeof(g_buttons[0]))) g_buttons[g_nButtons++] = {{x, y, x + w, y + h}, a, text, selected};
 }
 
 // D-253 (owner: "add First Person (walking) and First Person (cutscenes) on / off, and reorder the VR settings - it's all
@@ -190,7 +208,7 @@ struct Row {
     Action a, b;            // the two choices, or the stepper's down / up
     const wchar_t *ta, *tb; // their texts (nullptr: a stepper)
     bool selA;              // the first choice is the selected one (two choices only)
-    int value;              // stepper: 0 = turning step, 1 = picture size
+    int value;              // stepper: 0 = turning step, 1 = picture size, 2 = hand angle
 };
 int Rows(Row* r) {
     const bool snap = Snap();
@@ -199,32 +217,36 @@ int Rows(Row* r) {
     r[n++] = {L"First person (cutscenes)", kF3On, kF3Off, L"On", L"Off", fp::CutsceneFP(), 0};
     r[n++] = {L"Finishers perspective", kFinisherFp, kFinisherTp, L"First person", L"Third person", !FinisherTp(), 0};
     r[n++] = {L"Motion controls (first person)", kMotionOn, kMotionOff, L"On", L"Off", Motion(), 0};
+    r[n++] = {L"Hand angle (tilt the hands and the axe)", kHandDown, kHandUp, nullptr, nullptr, false, 2};  // D-288
+    r[n++] = {L"Health bars (first person)", kBarsHead, kBarsHand, L"Head", L"Left hand", !BarsHand(), 0};  // D-284
+    r[n++] = {L"Aiming mode (left trigger)", kAimHold, kAimPress, L"Hold", L"Press", !AimPress(), 0};
     r[n++] = {L"Wall collision (first person)", kWallsOn, kWallsOff, L"On", L"Off", Walls(), 0};
     r[n++] = {L"Turning (first person)", kTurnSmooth, kTurnSnap, L"Smooth", L"Snap", !snap, 0};
     r[n++] = {snap ? L"Snap angle" : L"Turning speed", kStepDown, kStepUp, nullptr, nullptr, false, 0};
     r[n++] = {L"Controller buttons", kPadXbox, kPadPs, L"Xbox", L"PlayStation", input::PadMode() == 0, 0};
     r[n++] = {L"VR picture size (per eye)", kSizeDown, kSizeUp, nullptr, nullptr, false, 1};
     r[n++] = {L"Rendering method", kAfrOff, kAfrOn, L"Native", L"AFR", !Afr(), 0};
-    r[n++] = {L"VR on / off  (Crashing during cutscene)", kVrOn, kVrOff, L"On", L"Off", true, 0};  // only shown in VR
+    // (D-292, owner: "remove On and Off for VR in the VR settings panel" - F9 still switches VR)
     return n;
 }
-constexpr int kMaxRows = 11;
+constexpr int kMaxRows = 13;
 
-void Layout(wchar_t* stepText, wchar_t* sizeText) {
+void Layout(wchar_t* stepText, wchar_t* sizeText, wchar_t* handText) {
     g_nButtons = 0;
-    Row rows[16];
+    Row rows[20];
     const int n = Rows(rows);
     for (int i = 0; i < n; ++i) {
         const Row& r = rows[i];
-        const int y = kTop + i * kRow + 48;
+        const int y = kTop + i * kRow + kButtonY;
         if (r.ta) {
-            AddButton(40, y, 440, 68, r.a, r.ta, r.selA);
-            AddButton(520, y, 440, 68, r.b, r.tb, !r.selA);
+            AddButton(40, y, 440, kButtonH, r.a, r.ta, r.selA);
+            AddButton(520, y, 440, kButtonH, r.b, r.tb, !r.selA);
         } else {
-            AddButton(40, y, 140, 68, r.a, L"\x2212", false);
-            AddButton(820, y, 140, 68, r.b, L"+", false);
+            AddButton(40, y, 140, kButtonH, r.a, L"\x2212", false);
+            AddButton(820, y, 140, kButtonH, r.b, L"+", false);
         }
     }
+    swprintf_s(handText, 32, L"%.0f\x00b0", fp::ArmsWristPitch());
     if (Snap()) swprintf_s(stepText, 32, L"%.0f\x00b0", config::GetFloat("snap_turn_degrees", 45.f));
     else swprintf_s(stepText, 32, L"%.0f %%", config::GetFloat("turn_speed", 1.f) * 100.f);
     if (const int autoPx = frame::AutoRenderSize()) {
@@ -237,23 +259,24 @@ void Layout(wchar_t* stepText, wchar_t* sizeText) {
 
 void Draw() {
     if (!MakeSurface()) return;
-    wchar_t stepText[32], sizeText[32];
-    Layout(stepText, sizeText);
+    wchar_t stepText[32], sizeText[32], handText[32];
+    Layout(stepText, sizeText, handText);
     const COLORREF bg = RGB(40, 40, 42), title = RGB(178, 28, 28), button = RGB(66, 66, 70), hover = RGB(96, 96, 102),
                    selected = RGB(178, 28, 28), selectedHover = RGB(210, 50, 50), white = RGB(245, 245, 245),
                    label = RGB(200, 200, 205), hint = RGB(150, 150, 155);
     Fill({0, 0, kW, kH}, bg);
     Fill({0, 0, kW, 100}, title);
     Text(L"VR SETTINGS", {40, 0, kW - 40, 100}, g_fTitle, white, DT_LEFT | DT_VCENTER);
-    Row rows[16];
+    Row rows[20];
     const int n = Rows(rows);
     for (int i = 0; i < n; ++i) {
         const int y = kTop + i * kRow;
-        Text(rows[i].label, {40, y, kW - 40, y + 44}, g_fLabel, label, DT_LEFT | DT_VCENTER);
+        Text(rows[i].label, {40, y, kW - 40, y + kLabelH}, g_fLabel, label, DT_LEFT | DT_VCENTER);
         if (!rows[i].ta) {  // the stepper's value box
-            const int by = y + 48;
-            Fill({200, by, 800, by + 68}, RGB(30, 30, 32), 14);
-            Text(rows[i].value == 1 ? sizeText : stepText, {200, by, 800, by + 68}, g_fButton, white, DT_CENTER | DT_VCENTER);
+            const int by = y + kButtonY;
+            Fill({200, by, 800, by + kButtonH}, RGB(30, 30, 32), 14);
+            Text(rows[i].value == 1 ? sizeText : rows[i].value == 2 ? handText : stepText, {200, by, 800, by + kButtonH},
+                 g_fButton, white, DT_CENTER | DT_VCENTER);
         }
     }
     for (int i = 0; i < g_nButtons; ++i) {
@@ -262,9 +285,7 @@ void Draw() {
         Fill(b.r, b.selected ? (hv ? selectedHover : selected) : (hv ? hover : button), 14);
         Text(b.text, b.r, g_fButton, white, DT_CENTER | DT_VCENTER);
     }
-    Text(L"Point a controller at an option and pull its trigger.", {40, kH - 150, kW - 40, kH - 110}, g_fHint, hint,
-         DT_LEFT | DT_VCENTER);
-    Text(L"VR off: press F9 on the keyboard to turn it back on.", {40, kH - 106, kW - 40, kH - 66}, g_fHint, hint,
+    Text(L"Point a controller at an option and pull its trigger.", {40, kH - 106, kW - 40, kH - 66}, g_fHint, hint,
          DT_LEFT | DT_VCENTER);
     // D-253 (owner: "instead of the picture-size line: for a quick switch between first person cutscenes or walking
     // press O / Y near your head") - the right upper button: PS VR2 O, Meta / Index B (D-252)
@@ -400,11 +421,12 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
         if (!hit && hs.trigger < 0.35f) g_armed[hand] = true;
     }
     // redraw when a value or the hovered button changed (values: also changed with F10 / F11 or a gowvr.ini edit)
-    char state[96];
-    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d %d %d %d", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
+    char state[128];
+    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d %d %d %d %d %d %.0f", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
               config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(), Walls() ? 1 : 0,
               config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0, Afr() ? 1 : 0,
-              Motion() ? 1 : 0, fp::GameplayFP() ? 1 : 0, fp::CutsceneFP() ? 1 : 0);
+              Motion() ? 1 : 0, fp::GameplayFP() ? 1 : 0, fp::CutsceneFP() ? 1 : 0, BarsHand() ? 1 : 0, AimPress() ? 1 : 0,
+              fp::ArmsWristPitch());
     if (hover != g_hover || strcmp(state, g_lastState) != 0 || g_needDraw) {
         g_hover = hover;
         strcpy_s(g_lastState, state);

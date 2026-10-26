@@ -122,6 +122,7 @@ BlendConv g_nullConv{nullptr, nullptr, true};
 // composite
 ID3D11VertexShader* g_vs = nullptr;
 ID3D11PixelShader* g_ps = nullptr;
+ID3D11PixelShader* g_psLayer = nullptr;  // D-280: the reticle region moved inside the HUD layer picture
 ID3D11SamplerState* g_samp = nullptr;
 ID3D11BlendState* g_overBlend = nullptr;
 ID3D11RasterizerState* g_rs = nullptr;
@@ -947,6 +948,24 @@ float4 ps(V i) : SV_Target {
     }
     return float4(max(m.rgb, 0), saturate(m.a));
 }
+// D-280: the same reticle-region move, but in the HUD's own space (the output is the HUD layer picture, same size as
+// the UI target): each HUD pixel p shows up in the eye image at e = 0.5 + (p - 0.5) x scale, and the moved region
+// there is the source at retS + (e - retD) / sRet - exactly what ps does, without leaving the sharp layer
+float4 ps_layer(V i) : SV_Target {
+    float2 p = i.uv;
+    float4 m = ui.SampleLevel(smp, p, 0);
+    if (retOn > 0.5) {
+        float2 e = 0.5 + (p - 0.5) * float2(s, sY);
+        float2 b = retS + (e - retD) / float2(sRet, sRetY);
+        float4 r = ui.SampleLevel(smp, b, 0);
+        float2 da = (p - retS) * float2(aspect, 1);
+        if (dot(da, da) < rSrc * rSrc) m = 0;
+        float2 db = (b - retS) * float2(aspect, 1);
+        if (dot(db, db) >= rSrc * rSrc || any(b < 0) || any(b > 1)) r = 0;
+        m = r + m * (1 - saturate(r.a));
+    }
+    return m;
+}
 )";
 
 bool CreateComposite() {
@@ -967,6 +986,14 @@ bool CreateComposite() {
               SUCCEEDED(g_dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &g_ps));
     vsb->Release();
     psb->Release();
+    {   // D-280 (optional: without it the moved reticle falls back to the paste, as before)
+        ID3DBlob* lb = nullptr;
+        if (SUCCEEDED(compile(kShader, sizeof(kShader) - 1, "sharpui", nullptr, nullptr, "ps_layer", "ps_5_0", 0, 0, &lb, &err))) {
+            if (FAILED(g_dev->CreatePixelShader(lb->GetBufferPointer(), lb->GetBufferSize(), nullptr, &g_psLayer))) g_psLayer = nullptr;
+            lb->Release();
+        }
+        if (!g_psLayer) Log("sharpui: HUD layer reticle shader unavailable - the moved reticle is pasted as before");
+    }
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -1126,6 +1153,68 @@ std::atomic<ULONGLONG> g_hudCopiedAt[2] = {0, 0};  // D-243: when each eye's HUD
 float g_hudSx[2] = {0, 0}, g_hudSy[2] = {0, 0};
 uint64_t g_hudLayerFrames = 0;
 
+ID3D11RenderTargetView* g_hudEyeRtv[2] = {};  // D-280: mip 0 of each eye's HUD layer picture
+bool ReticleRegionMoved();
+// D-280: g_uiTex drawn into the eye's HUD layer picture with the reticle region moved to the shot's direction (ps_layer)
+bool LayerReticleMove(ID3D11DeviceContext* ctx, int eye) {
+    if (!CreateComposite() || !g_psLayer || !g_uiSrv || !g_hudEyeTex[eye]) return false;
+    if (!g_hudEyeRtv[eye]) {
+        D3D11_TEXTURE2D_DESC d{};
+        g_hudEyeTex[eye]->GetDesc(&d);
+        D3D11_RENDER_TARGET_VIEW_DESC rd{};
+        rd.Format = d.Format;
+        rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        rd.Texture2D.MipSlice = 0;
+        if (!(d.BindFlags & D3D11_BIND_RENDER_TARGET) || FAILED(g_dev->CreateRenderTargetView(g_hudEyeTex[eye], &rd, &g_hudEyeRtv[eye]))) {
+            g_hudEyeRtv[eye] = nullptr;
+            return false;
+        }
+    }
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1))) return false;
+    const float uiScale = UiScaleCurrent();
+    if (g_retScale.load() < -1.5f) g_retScale = config::GetFloat("ui_reticle_scale", -1.f);
+    const float retScale = g_retScale.load() > 0.f ? g_retScale.load() : uiScale;
+    float su = 0.5f, sv = 0.5f, sr = 0.f, du = 0.5f, dv = 0.5f;
+    const bool aiming = AimReticleDisplay(&su, &sv, &sr, &du, &dv);
+    const float aspect = (float)g_uiW / (float)(g_uiH ? g_uiH : 1), fy = UiVerticalFix(aspect);
+    struct { float s, sRet, retOn, rSrc, retSx, retSy, retDx, retDy, aspect, sY, sRetY, pad; } k{
+        fmaxf(uiScale, 0.05f), fmaxf(retScale, 0.05f), aiming ? 1.f : 0.f, sr, su, sv, du, dv,
+        aspect, fmaxf(uiScale * fy, 0.02f), fmaxf(retScale * fy, 0.02f), 0.f};
+    ID3DDeviceContextState* prev = nullptr;
+    c1->SwapDeviceContextState(g_ownState, &prev);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(c1->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
+        memcpy(m.pData, &k, sizeof(k));
+        c1->Unmap(g_cb, 0);
+    }
+    D3D11_VIEWPORT vp{0, 0, (float)g_uiW, (float)g_uiH, 0, 1};
+    static const FLOAT zero[4] = {0, 0, 0, 0};
+    c1->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    c1->IASetInputLayout(nullptr);
+    c1->VSSetShader(g_vs, nullptr, 0);
+    c1->PSSetShader(g_psLayer, nullptr, 0);
+    c1->PSSetShaderResources(0, 1, &g_uiSrv);
+    c1->PSSetSamplers(0, 1, &g_samp);
+    c1->PSSetConstantBuffers(0, 1, &g_cb);
+    c1->RSSetState(g_rs);
+    c1->RSSetViewports(1, &vp);
+    c1->OMSetBlendState(nullptr, zero, 0xffffffff);  // the picture is replaced (no blending)
+    c1->OMSetRenderTargets(1, &g_hudEyeRtv[eye], nullptr);
+    c1->Draw(3, 0);
+    ID3D11ShaderResourceView* noSrv = nullptr;
+    c1->PSSetShaderResources(0, 1, &noSrv);
+    ID3D11RenderTargetView* noRtv = nullptr;
+    c1->OMSetRenderTargets(1, &noRtv, nullptr);
+    c1->OMSetBlendState(g_overBlend, zero, 0xffffffff);  // (the composite expects its blend in this state object)
+    c1->SwapDeviceContextState(prev, nullptr);
+    if (prev) prev->Release();
+    c1->Release();
+    static int logs = 0;
+    if (logs++ < 3) Log("sharpui: aiming reticle moved inside the HUD layer (D-280)");
+    return true;
+}
+
 bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
     if (!g_uiTex || eye < 0 || eye > 1) return false;
     D3D11_TEXTURE2D_DESC d{};
@@ -1133,6 +1222,7 @@ bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
     if (!g_hudEyeTex[eye] || g_hudEyeW != d.Width || g_hudEyeH != d.Height) {
         for (int e = 0; e < 2; ++e) {
             if (g_hudEyeSrv[e]) { g_hudEyeSrv[e]->Release(); g_hudEyeSrv[e] = nullptr; }
+            if (g_hudEyeRtv[e]) { g_hudEyeRtv[e]->Release(); g_hudEyeRtv[e] = nullptr; }  // D-280
             if (g_hudEyeTex[e]) { g_hudEyeTex[e]->Release(); g_hudEyeTex[e] = nullptr; }
             g_hudReady[e] = false;
         }
@@ -1146,7 +1236,14 @@ bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
         g_hudEyeH = d.Height;
         Log("sharpui: HUD layer textures %ux%u (the HUD as its own layer in the headset)", d.Width, d.Height);
     }
-    ctx->CopyResource(g_hudEyeTex[eye], g_uiTex);
+    if (ReticleRegionMoved()) {
+        // D-280 (owner: "the Atreus aiming bow icon is low resolution"): while Atreus' crosshair is moved to the view's
+        // centre (D-238, the region paste) the whole HUD fell back to the paste into the eye image (resampled twice,
+        // blurry). The region is now moved inside the HUD layer's own picture and the layer stays
+        if (!LayerReticleMove(ctx, eye)) return false;
+    } else {
+        ctx->CopyResource(g_hudEyeTex[eye], g_uiTex);
+    }
     ctx->GenerateMips(g_hudEyeSrv[eye]);
     const float s = fmaxf(UiScaleCurrent(), 0.05f);
     g_hudSx[eye] = s;
@@ -1171,7 +1268,8 @@ void PasteHud(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const ch
     if (g_hudShotReq.exchange(false)) HudShot(ctx, target);
     static const bool layerOn = config::GetFloat("hud_layer", 1.f) > 0.5f;
     const int eye = EyesRenderEye();
-    if (!(layerOn && vr::XrRunning() && eye >= 0 && !ReticleRegionMoved() && HudLayerCopy(ctx, eye)))
+    // (D-280: also while the aiming reticle region is moved - HudLayerCopy moves it inside the layer picture)
+    if (!(layerOn && vr::XrRunning() && eye >= 0 && HudLayerCopy(ctx, eye)))
         Composite(ctx, target);
     g_drew = false;
     g_needClear = true;  // the next UI draw (the other eye's) starts on a clear HUD target

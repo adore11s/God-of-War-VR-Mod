@@ -176,8 +176,19 @@ static bool ShopScene() {
 // csRageBeatdownTroll00Idle / Finisher - D-210 counted it as a cutscene for F3). Not the other sync moves (climbing nav*,
 // objects env*) nor the Baldur fight's scripted csBaldur* / csMMA* (D-184 / D-192: cutscenes), nor csDef* (parries,
 // ordinary combat). Held 0.5 s past the last such frame (the kills chain a few moves). gowvr.ini finisher_third_person.
+// D-290 (owner: "fighting Baldur, it gets mistaken as a third-person finisher during the fight"; owner log: three
+// "finisher 'csaxelightcombo01blendlight#csglobalmeleestickf01anim_1'" in the fight - the axe stuck in Baldur, Kratos
+// yanking it out): Kratos' own attack follow-ups are combat, not finishers - D-100's list (combat.cpp): csaxe*, csblade*,
+// csglobalmelee*, *meleestick*, csbare*, cskick*, csspartan*, cschain*
+static bool OwnFollowUpName(const char* a) {
+    for (const char* p : {"csaxe", "csblade", "csglobalmelee", "csbare", "cskick", "csspartan", "cschain"})
+        if (_strnicmp(a, p, strlen(p)) == 0) return true;
+    for (const char* q = a; *q; ++q)
+        if (_strnicmp(q, "meleestick", 10) == 0) return true;
+    return false;
+}
 static bool FinisherName(const char* a) {
-    if (!a || _strnicmp(a, "cs", 2) != 0) return false;
+    if (!a || _strnicmp(a, "cs", 2) != 0 || OwnFollowUpName(a)) return false;
     // (D-227: nor the blizzard's scripted shield moves csMaMo* - cutscenes, ScriptedName)
     return _strnicmp(a, "csbaldur", 8) != 0 && _strnicmp(a, "csmma", 5) != 0 && _strnicmp(a, "csdef", 5) != 0 &&
            _strnicmp(a, "csmamo", 6) != 0;

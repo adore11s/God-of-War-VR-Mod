@@ -1620,6 +1620,8 @@ void ArmsAdjustPitch(float deltaDeg) {
     Log("arms: %s = %.0f deg", g_pitchKey, g_pitchDeg);
 }
 
+float ArmsWristPitch() { return g_pitchDeg; }
+
 void ArmsAdjustYaw(float deltaDeg) {
     g_yawDeg += deltaDeg;
     config::SetFloat(FamilyKey("wristyaw").c_str(), g_yawDeg);

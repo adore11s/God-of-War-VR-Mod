@@ -33,6 +33,7 @@ uint64_t VpadPolls();
 void SetGameWindow(struct HWND__* w);
 void FocusOverride(bool on);
 void FocusKeepAlive();  // re-assert window activation (command thread, 1 Hz)
+void ImportWatch();     // D-287: our import slots taken back if another module hooked over them (command thread, 1 Hz)
 // Keyboard fallback for menus: WM_KEYDOWN/WM_KEYUP posted to the game window.
 void PostKey(int vk, int ms);
 // The same, one edge (key down or up) without waiting - for the pad thread (the four-face-button hold = Esc)

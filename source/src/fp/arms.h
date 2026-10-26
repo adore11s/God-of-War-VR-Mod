@@ -44,5 +44,6 @@ void ArmsAttachDiag(int n);    // diagnostic: per-pass wrist / attach joint dist
 void ArmsAdjustPitch(float deltaDeg);
 void ArmsAdjustYaw(float deltaDeg);
 void ArmsAdjustRoll(float deltaDeg);
+float ArmsWristPitch();  // D-288: the pitch now (the VR settings panel's "Hand angle")
 
 }  // namespace gowvr::fp

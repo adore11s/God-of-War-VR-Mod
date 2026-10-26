@@ -957,12 +957,34 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     // state with hysteresis: on past aim_on 0.45, off below aim_off 0.30 - the game's L2, the aimed-trigger R2 rule and the
     // swing classifier all use it
     static const float aimOn = config::GetFloat("aim_on", 0.45f), aimOff = config::GetFloat("aim_off", 0.30f);
-    static bool aimLatch = false;
+    static bool aimHeld = false;
+    const bool aimWasHeld = aimHeld;
     {
         const float lt = L.active ? L.trigger : 0.f;
-        if (!aimLatch && lt > aimOn) aimLatch = true;
-        else if (aimLatch && lt < aimOff) aimLatch = false;
+        if (!aimHeld && lt > aimOn) aimHeld = true;
+        else if (aimHeld && lt < aimOff) aimHeld = false;
     }
+    // D-286 (owner: "an option Aiming mode: Hold, Press - one press of L2 keeps aiming on, another press turns it off"):
+    // VR settings "Aiming mode (left trigger)" (gowvr.ini aim_toggle). Press: each pull of the left trigger (the same
+    // hysteresis) turns aiming on / off and the game gets a full L2 meanwhile. Not on a 2D screen (menus, loading,
+    // videos - the trigger is passed as held there) and not a pull that clicks the VR settings panel; a 2D screen or
+    // a cutscene's start ends the aim
+    static bool aimToggled = false, cinePrev = false;
+    const bool aimPress = config::GetFloat("aim_toggle", 0.f) > 0.5f, screen2D = stereo::Screen2DFrame();
+    {
+        const bool cine = fp::InCinematic();
+        if (!aimPress || screen2D || (cine && !cinePrev)) {
+            if (aimToggled) Log("vrmap: aiming (press) off - %s (D-286)", !aimPress ? "Hold chosen" : screen2D ? "a 2D screen" : "a cutscene");
+            aimToggled = false;
+        } else if (aimHeld && !aimWasHeld && L.active && !vr::PanelCapturesTrigger(0)) {
+            aimToggled = !aimToggled;
+            static int logs = 0;
+            if (logs++ < 20) Log("vrmap: aiming (press) %s (D-286)", aimToggled ? "on" : "off");
+        }
+        cinePrev = cine;
+    }
+    const bool aimByPress = aimPress && !screen2D;
+    const bool aimLatch = aimByPress ? aimToggled : aimHeld;
     g_aimTrigger = L.active ? L.trigger : 0.f;
     if (L.active) {
         float ls[2] = {L.stick[0], L.stick[1]};
@@ -978,7 +1000,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             ls[1] = L.stick[0] * sa + L.stick[1] * ca;
         }
         Stick(ls, 0.15f, &g->sThumbLX, &g->sThumbLY);
-        g->bLeftTrigger = aimLatch ? Trigger(L.trigger, 0.25f) : 0;        // aim (D-204: only while aiming)
+        g->bLeftTrigger = !aimLatch ? 0 : aimByPress ? 255 : Trigger(L.trigger, 0.25f);  // aim (D-204: only while aiming; D-286)
         // shield; in F1 not while the left hand reaches over the shoulder for the Blades (D-043)
         // D-068: bare-handed / in Rage (F1) the shield waits a moment after the fist closes (see LeftShieldActive)
         if (fp::FpMode() == 1 && !plain ? LeftShieldActive(L, now, CurMode()) : g_gripHeld[0]) g->wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
@@ -1038,6 +1060,15 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
                 chord = true;
                 used = combo;
                 fromCentre = fmaxf(fabsf(R.stick[0]), fabsf(R.stick[1])) < 0.35f;
+                // D-279 (owner: "I can't change Atreus' arrow type with the VR controllers" - D-pad up; owner log: three
+                // "right stick clicked while pushed (turning) - ignored"): pushing up and then clicking is the natural
+                // way, and turning only uses the stick sideways - a click with the stick pushed clearly up or down is the
+                // D-pad chord too (up = arrow type, down = quick turn)
+                if (!fromCentre && fabsf(R.stick[1]) > 0.5f && fabsf(R.stick[1]) > 1.5f * fabsf(R.stick[0])) {
+                    fromCentre = true;
+                    static int vertLogs = 0;
+                    if (vertLogs++ < 20) Log("vrmap: right stick clicked while pushed %s - D-pad chord (D-279)", R.stick[1] > 0.f ? "up" : "down");
+                }
                 if (!fromCentre) {
                     used = true;  // (no R3 on release either)
                     static int accLogs = 0;

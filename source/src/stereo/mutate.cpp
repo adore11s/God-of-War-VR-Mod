@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 
 namespace gowvr::stereo {
 namespace {
@@ -238,7 +239,18 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
             char prim[96];
             fp::HeroPrimaryAnim(prim, sizeof(prim));
             const char* act = fp::ActiveMoveAnim();
-            traversal = _strnicmp(prim, "nav", 3) == 0 || (act && _strnicmp(act, "nav", 3) == 0);
+            // D-278 (owner: "make chest opening animations like the F1 boat or climbing scenes"): the chests' moves
+            // (r_heroa00.as: envTripleChestUnlocked, envRunicChest*, envLegendaryChest*, envContainerCommon / Legendary /
+            // Coffin*) - already body-locked (the view at the body's eye, D-164) - turn the view with Kratos' body too
+            auto chest = [](const char* n) {
+                if (!n || _strnicmp(n, "env", 3) != 0) return false;
+                char l[96];
+                size_t i = 0;
+                for (; n[i] && i < sizeof(l) - 1; ++i) l[i] = (char)tolower((unsigned char)n[i]);
+                l[i] = 0;
+                return (strstr(l, "chest") || strstr(l, "container")) && !strstr(l, "vendor");
+            };
+            traversal = _strnicmp(prim, "nav", 3) == 0 || (act && _strnicmp(act, "nav", 3) == 0) || chest(prim) || chest(act);
         }
         if (traversal && fp::GameRoot(gp, &gy)) {
             if (haveGy) {
@@ -253,7 +265,7 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
         } else {
             if (haveGy && fabsf(turned) > 0.5f) {
                 static int logs = 0;
-                if (logs++ < 20) Log("camsync: the view turned with Kratos' body in a climb / rope move (%.0f deg) (D-255)", turned * 57.2958f);
+                if (logs++ < 20) Log("camsync: the view turned with Kratos' body in a climb / rope / chest move (%.0f deg) (D-255 / D-278)", turned * 57.2958f);
             }
             haveGy = false;
             turned = 0.f;
@@ -440,6 +452,19 @@ float UiSizeMul() {
     const float m = config::GetFloat("ui_size", 0.75f);
     return m > 0.1f && m <= 2.f ? m : 1.f;
 }
+// D-285 (owner, a Steam Link player on Quest: "the UI is tiny and low resolution"; their log: rendered eye frustum tanX
+// 1.192 (100 deg) - the owner's PS VR2 2.300 (133 deg)): the HUD is a share of the rendered frustum, tuned on the
+// PS VR2 - on a narrower headset it came out about half as wide in the view. The scale now keeps the HUD at the same
+// angle as on the PS VR2: x ui_ref_tan (2.3) / the rendered tanX, 0.5 .. 2.5, the result at most 0.95 of the frustum.
+// gowvr.ini ui_same_angle 0 = a share of the frustum, as before
+float EyeTanXForAim();
+float UiHeadsetFactor() {
+    static const float ref = config::GetFloat("ui_ref_tan", 2.3f);
+    const float tx = EyeTanXForAim();
+    if (tx <= 0.1f || ref <= 0.1f || config::GetFloat("ui_same_angle", 1.f) < 0.5f) return 1.f;
+    return fminf(fmaxf(ref / tx, 0.5f), 2.5f);
+}
+float UiFit(float s) { return fminf(s * UiHeadsetFactor(), 0.95f); }
 void UiScaleView(uint8_t* view) {
     if (g_uiScale < 0.f) g_uiScale = config::GetFloat("ui_scale", 0.35f);  // D-094b: 0.35 (owner; 0.75, 0.55, 0.4 were too big)
     if (g_uiScaleFp < 0.f) g_uiScaleFp = config::GetFloat("ui_scale_fp", 0.5f);
@@ -456,8 +481,8 @@ void UiScaleView(uint8_t* view) {
     }
     const bool aiming = aimSeen && GetTickCount64() - aimSeen < 400;
     // D-257: the overall size (ui_size) shrinks everything but the shop's UI, which keeps its own size
-    const float s = fp::InShop() ? g_uiScale
-                                 : ((fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale) * UiSizeMul();
+    const float s = UiFit(fp::InShop() ? g_uiScale
+                                       : ((fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale) * UiSizeMul());  // D-285
     if (!g_headCamOn || g_screen2D.load()) { ++g_uiSkipCam; return; }
     float* P = (float*)(view + 0xd0);
     if (P[11] != 0.f || P[15] != 1.f) { ++g_uiSkipPersp; return; }  // orthographic only (a perspective P has P23 = -1)
@@ -525,20 +550,30 @@ void CombatHudTick() {
     }
     const bool menu = Screen2DFrame();
     if (PauseMenuOpen()) repair = false;
+    // D-284: health bars on the left hand (hud_bars_hand, the VR settings panel): in F1 the Combat HUD is On (the bars
+    // always there - xr.cpp puts them on the hand), no head peek; switched live
+    const bool handBars = config::GetFloat("hud_bars_hand", 1.f) > 0.5f;  // D-291: the left hand by default
     if (want >= 0 && want <= 2) {
         static bool applied = false;
+        static int lastWant = -1;
+        const int wantNow = handBars ? 1 : want;
         const bool f1 = fp::FpMode() == 1 && !menu;
+        if (f1 && applied && lastWant >= 0 && wantNow != lastWant && real == lastWant) {
+            real = (uint8_t)wantNow;
+            Log("hud: health bars %s - Combat HUD %d (D-284)", handBars ? "on the hand" : "at the head", wantNow);
+        }
+        lastWant = wantNow;
         if (f1 && !applied) {
             applied = true;
             int cur = real;
             if (repair && cur == 2) cur = 1;
             if (cur != want && cur <= 2) config::SetFloat("combat_hud_restore", (float)cur);
-            real = (uint8_t)want;
-            Log("hud: F1 - Combat HUD %d -> %d (%s)", cur, want, want == 2 ? "Touch: hidden until called" : want == 0 ? "Off" : "On");
+            real = (uint8_t)wantNow;
+            Log("hud: F1 - Combat HUD %d -> %d (%s)", cur, wantNow, wantNow == 2 ? "Touch: hidden until called" : wantNow == 0 ? "Off" : "On");
         } else if (!f1 && applied) {
             applied = false;
             const int restore = (int)config::GetFloat("combat_hud_restore", 1.f);
-            if (real == want) {
+            if (real == want || real == wantNow) {
                 real = (uint8_t)restore;
                 Log("hud: %s - Combat HUD back to %d", menu ? "menu open in F1 (the player's own setting meanwhile)" : "F1 off",
                     restore);
@@ -550,7 +585,7 @@ void CombatHudTick() {
         }
     }
     const int fpm = fp::FpMode();
-    const bool peek = input::HudPeek() && (fpm == 1 || fpm == 2) && !menu;
+    const bool peek = input::HudPeek() && (fpm == 1 || fpm == 2) && !menu && !(handBars && fpm == 1);  // D-284
     const bool touch = peek && real == 2 && input::HudTouchPossible();
     input::SetHudTouch(touch);
     if (peek) {
@@ -789,6 +824,9 @@ bool g_eyePoseMode = false, g_eyeLevel = true;
 Mat4 g_eyeDelta[2];
 float g_eyeTan[2][2] = {{0, 0}, {0, 0}};
 float g_fovTan[2] = {0, 0};  // requested symmetric tanX/tanY for the eye views (0 = keep the game's projection)
+// D-281 (an LOD camera hook at 0x140484480) is gone (D-283): its condition never matched - the LOD camera is
+// built from the game's own view, which keeps the game's field of view - and its per-call counters on the job
+// threads made the game stutter (owner)
 float EyeTanYForAim() { return g_fovTan[1]; }
 float EyeTanXForAim() { return g_fovTan[0]; }
 
@@ -1298,8 +1336,8 @@ float UiScaleCurrent() {
     const float s = g_uiScale < 0.f ? config::GetFloat("ui_scale", 0.35f) : g_uiScale;
     const float sFp = g_uiScaleFp < 0.f ? config::GetFloat("ui_scale_fp", 0.5f) : g_uiScaleFp;
     const int fpm = fp::FpMode();
-    if (fp::InShop()) return s;  // D-257: the shop's UI keeps its size
-    return ((fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s) * UiSizeMul();
+    if (fp::InShop()) return UiFit(s);  // D-257: the shop's UI keeps its size (D-285: at the same angle on every headset)
+    return UiFit(((fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s) * UiSizeMul());
 }
 
 void SetHeadCamera(bool on) {
@@ -1325,8 +1363,10 @@ void SetEyeFov(float tanX, float tanY) {
     if (tanX != g_fovTan[0] || tanY != g_fovTan[1])
         Log("headcam: eye frustum tanX=%.3f tanY=%.3f (h %.1f deg, v %.1f deg)", tanX, tanY,
             2.f * atanf(tanX) * 57.2958f, 2.f * atanf(tanY) * 57.2958f);
+    const bool changed = tanX != g_fovTan[0];
     g_fovTan[0] = tanX;
     g_fovTan[1] = tanY;
+    if (changed) Log("headcam: HUD x %.2f (same angle as on a PS VR2, D-285)", UiHeadsetFactor());
 }
 
 bool EyeRenderedTan(int eye, float* tanX, float* tanY) {

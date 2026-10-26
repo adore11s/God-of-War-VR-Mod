@@ -43,12 +43,13 @@ bool PatchImport(HMODULE module, const char* dll, const char* func, void* hook, 
     return false;
 }
 
-int PatchImportAny(HMODULE module, const char* dllPrefix, uint16_t ordinal, const char* name, void* hook, void** original) {
+namespace {
+// every import slot of `module` for dllPrefix* ! (ordinal or name), normal and delay-load tables: f(dll, slot, delay)
+template <class F> void ForImportSlots(HMODULE module, const char* dllPrefix, uint16_t ordinal, const char* name, F&& f) {
     auto base = (uint8_t*)module;
     auto nt = (IMAGE_NT_HEADERS64*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
     const size_t plen = strlen(dllPrefix);
-    int patched = 0;
-    // one thunk table: names (ordinal or by-name) + the slots they fill; `delayDll` = resolve the original ourselves
+    // one thunk table: names (ordinal or by-name) + the slots they fill
     auto table = [&](const char* dll, IMAGE_THUNK_DATA64* names, IMAGE_THUNK_DATA64* slots, bool delay) {
         for (; names->u1.AddressOfData; ++names, ++slots) {
             bool match;
@@ -58,18 +59,7 @@ int PatchImportAny(HMODULE module, const char* dllPrefix, uint16_t ordinal, cons
                 auto byName = (IMAGE_IMPORT_BY_NAME*)(base + names->u1.AddressOfData);
                 match = name && strcmp((const char*)byName->Name, name) == 0;
             }
-            if (!match) continue;
-            void** slot = (void**)&slots->u1.Function;
-            if (*slot == hook) { ++patched; continue; }
-            void* real = *slot;
-            if (delay) {  // the slot holds the delay-load helper until the first call: resolve the function now
-                HMODULE m = LoadLibraryA(dll);
-                real = m ? (void*)GetProcAddress(m, name ? name : MAKEINTRESOURCEA(ordinal)) : nullptr;
-                if (!real && m && ordinal) real = (void*)GetProcAddress(m, MAKEINTRESOURCEA(ordinal));
-                if (!real) continue;
-            }
-            if (!*original) *original = real;
-            if (WritePointer(slot, hook)) ++patched;
+            if (match) f(dll, (void**)&slots->u1.Function, delay);
         }
     };
     auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
@@ -88,7 +78,37 @@ int PatchImportAny(HMODULE module, const char* dllPrefix, uint16_t ordinal, cons
             table(dll, (IMAGE_THUNK_DATA64*)(base + d->ImportNameTableRVA), (IMAGE_THUNK_DATA64*)(base + d->ImportAddressTableRVA),
                   true);
         }
+}
+}  // namespace
+
+int PatchImportAny(HMODULE module, const char* dllPrefix, uint16_t ordinal, const char* name, void* hook, void** original) {
+    int patched = 0;
+    ForImportSlots(module, dllPrefix, ordinal, name, [&](const char* dll, void** slot, bool delay) {
+        if (*slot == hook) { ++patched; return; }
+        void* real = *slot;
+        if (delay) {  // the slot holds the delay-load helper until the first call: resolve the function now
+            HMODULE m = LoadLibraryA(dll);
+            real = m ? (void*)GetProcAddress(m, name ? name : MAKEINTRESOURCEA(ordinal)) : nullptr;
+            if (!real && m && ordinal) real = (void*)GetProcAddress(m, MAKEINTRESOURCEA(ordinal));
+            if (!real) return;
+        }
+        if (!*original) *original = real;
+        if (WritePointer(slot, hook)) ++patched;
+    });
     return patched;
+}
+
+int ReclaimImportAny(HMODULE module, const char* dllPrefix, uint16_t ordinal, const char* name, void* hook, void** foreign) {
+    int taken = 0;
+    auto base = (uint8_t*)module;
+    const size_t size = ((IMAGE_NT_HEADERS64*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew))->OptionalHeader.SizeOfImage;
+    ForImportSlots(module, dllPrefix, ordinal, name, [&](const char*, void** slot, bool) {
+        void* p = *slot;
+        if (!p || p == hook || ((uint8_t*)p >= base && (uint8_t*)p < base + size)) return;
+        if (!*foreign) *foreign = p;
+        if (WritePointer(slot, hook)) ++taken;
+    });
+    return taken;
 }
 
 bool PatchVtable(void* object, int index, void* hook, void** original) {

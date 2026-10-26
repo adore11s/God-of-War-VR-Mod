@@ -696,6 +696,7 @@ DWORD WINAPI Poll(void*) {
             WatchRefreshThreads();
             CrashFilterKeep();  // D-112
             input::FocusKeepAlive();
+            input::ImportWatch();  // D-287
         }
         FILE* f = nullptr;
         if (_wfopen_s(&f, path, L"rb") != 0 || !f) continue;
