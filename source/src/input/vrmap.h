@@ -20,5 +20,8 @@ void SetLocomotionYaw(float rad);
 // D-218: the left hand is held at the head - show the combat HUD (health / Spartan Rage / runic / talisman) meanwhile.
 // Any thread.
 bool HudPeek();
+// D-293: controllers without finger sensing - the fists are switched on with Y and no weapon is out: both hands are drawn
+// closed. Any thread.
+bool FistsClosed();
 
 }  // namespace gowvr::input

@@ -10,14 +10,13 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Game settings:** no need to change them. The installer does it.
 - **First person on / off:** hold your right hand next to your head and press **○ (PS VR2) / B (Meta Quest, Index)**. Press it while walking to switch first person for gameplay, or during a cutscene to switch it for cutscenes. By default it is on for gameplay and off for cutscenes. You can also change both in the VR settings panel.
 - **Tested:** only the first 2 hours of the game. Later parts may break or crash.
-- **No button prompt, or the body glitches out?** The fastest fix: switch to third person and then back to first person (**○ / B next to your head** twice).
 - **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too. In menus the sticks also work as the arrow buttons (D-pad).
 - **Health and Spartan Rage bars in first person:** above your **left hand**. Pick Head in the VR settings panel to see them by holding your left hand next to your head instead.
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
 - **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
-- **Fists:** rest your fingers on the grips. Squeezing the left grip fully is the shield. Meta Quest: **hold Y**.
-- **Finishers:** face the enemy from the front. They play in third person; first person can be picked in the VR settings panel.
+- **Fists:** rest your fingers on the grips. Squeezing the left grip fully is the shield. Meta Quest: **press Y** for fists, press it again to open your hands.
+- **Finishers:** they play in third person; first person can be picked in the VR settings panel.
 
 ## What the mod does
 
@@ -25,9 +24,9 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **DLSS in VR.** Each eye keeps its own DLSS history and motion, so edges stay sharp and stable.
 - **First person** in normal gameplay and in cutscenes. You can see your whole body.
 - **Motion controls in first person:**
-  - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists (Meta Quest: hold **Y**).
+  - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists (Meta Quest: press **Y** to switch them on or off).
   - **Leviathan Axe:** light attacks, throwing and recalling. Equip it by reaching over your right shoulder with either hand.
-  - **Shield:** press the left grip to defend yourself.
+  - **Shield:** press the left grip to defend yourself (Meta Quest: squeeze it fully).
   - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
   - **Blades of Chaos:** light attacks (more attacks are on the way). Equip them by reaching over your left shoulder with either hand.
 - **Finger detection.** Hover your fingers over the grip buttons and Kratos' fingers curl.
@@ -81,11 +80,8 @@ None of these files contain your user name or other personal information.
 
 ## Known bugs (fixes coming soon)
 
-- **The axe position in first person can be wrong** (see *Important: read before playing* for the workaround).
-- **Body glitches:** your hands can end up in the wrong place (see *Important: read before playing* for the workaround).
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
 - **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Try AFR rendering (VR settings panel: Rendering Method).
-- **Button prompts can go missing in first person** (see *Important: read before playing* for the workaround).
 
 ## Open source
 

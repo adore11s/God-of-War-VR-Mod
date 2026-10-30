@@ -75,7 +75,7 @@ These work while the game window or a SteamVR window is in front.
 | Left trigger | Aim |
 | Right trigger | Heavy attack |
 | Right grip | Light attack |
-| Left grip | Shield / block |
+| Left grip | Shield / block (Meta Quest: squeeze it fully) |
 | Right lower / upper face button | Interact / jump, and dodge |
 | Left lower / upper face button | Atreus, and recall the axe |
 | Left stick click | Sprint |
@@ -96,14 +96,14 @@ These work while the game window or a SteamVR window is in front.
 | Swing with the right trigger held, or chop down hard | Heavy attack |
 | Hold the right trigger with your hand above your head | Charged heavy attack |
 | Wave back and forth fast | Continuous attack |
-| Punch with your fingers resting on the grip buttons (no weapon in hand) | Fist attack (touching the grips makes the fists; squeezing the left grip fully is the shield) |
+| Punch with your fingers resting on the grip buttons (no weapon in hand) | Fist attack (touching the grips makes the fists; squeezing the left grip fully is the shield). Meta Quest: press Y to switch fists on, press it again to open your hands |
 | Swing with the Blades drawn | Blades attack |
 | Either hand's grip over your left shoulder | Equip / put away the Blades of Chaos |
 | Both hands above your head, then both down fast | Raging Smash / Chaos Slam |
 | Left trigger (aim) + a throwing motion | Throw the axe |
 | Either hand's grip over your right shoulder | Equip / put away the axe |
 | Right grip, or the left upper button (△ / Y), after a throw | Recall the axe |
-| Close your left hand (grip) | Shield |
+| Close your left hand (grip) | Shield (Meta Quest: squeeze the grip fully) |
 | Hold your left hand next to or over your head (grip released) | Show your health, Spartan Rage and runic bars, bigger and nearer the middle. Works best in PlayStation button mode (F11) |
 
 ---
@@ -151,7 +151,8 @@ Most useful settings:
 | `low_health_vignette` | 1 | At 20 % health or less (`low_health_frac` 0.2), red edges around your whole view in the headset (the game's low-health warning, made visible in VR). 0 = off; `low_health_alpha` (0.5) sets how strong, `low_health_inner_deg` / `low_health_outer_deg` (16 / 40) where it starts / is strongest; `low_health_test` 1 shows it at any health to try it |
 | `f1_combat_hud` | 2 | The health / Rage / runic bars in first person: 2 = hidden until your left hand is at your head (the game's "Touch"), 0 = always hidden, 1 = always shown. Third person keeps your own setting from the game's menu |
 | `hand_smoothing` | 1 | Smooths small hand jitter in first person and the VR settings panel's pointer (fast moves are not slowed). 0 = off |
-| `fist_on_y` | 1 | Controllers without finger sensing (Meta Quest): hold Y for fists. 0 = a light squeeze of the right grip |
+| `fist_on_y` | 1 | Controllers without finger sensing (Meta Quest): press Y to switch fists on or off. 0 = a light squeeze of the right grip |
+| `shield_squeeze_nofingers` | 0.9 | Controllers without finger sensing (Meta Quest): how far the left grip must be squeezed for the shield (1 = all the way). Lower it if your shield won't open |
 | `hit_reaction_freeze` | 1 | First person: Kratos' body and your view stay still when he is hit. 0 = off |
 | `dlss_fixes_auto` | 1 | The DLSS stereo fixes follow the game's DLSS setting. 0 = always on |
 | `hold_bad_poses` | 1 | When the headset loses tracking for a moment (more common over Virtual Desktop or Link), the view holds still instead of jumping. 0 = off |

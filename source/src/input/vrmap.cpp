@@ -232,6 +232,10 @@ void GateTick(XINPUT_GAMEPAD* g, ULONGLONG now) {
 // 400 ms of a left punch, so closing the fist to punch does not raise the shield (or the Rage stomp) first.
 extern bool g_gripHeld[2];
 ULONGLONG g_gripLSince = 0, g_lastLeftPunch = 0;
+// D-293 (set in VrGamepad): no finger sensing (Meta Quest), the left grip's shield press, the fists switched on with Y
+// (they stay on until the next press, through weapons, menus and finishers) and both hands drawn closed for it
+std::atomic<bool> g_noFingers{false}, g_fistsOn{false}, g_fistsClosed{false};
+bool g_shieldGrip = false, g_fistsBeforeY = false;
 float FistSqueeze() { static const float f = config::GetFloat("fist_squeeze", 0.85f); return f; }
 // D-076 (owner: fists "when I have both fingers on the grip buttons - not pressing, 90 % of the finger detection on L1 +
 // R1"): a hand is a fist when its middle finger (on the PSVR2 grip / L1 / R1) is curled >= fist_curl (0.9, the runtime's
@@ -248,14 +252,14 @@ bool FistHand(const vr::HandState& H) {
     // A Quest 3 tester (Virtual Desktop): "the fist hits don't register" - Meta's controllers have no finger sensing on
     // the grip (the log: "no finger data", curls 0), so fingers resting there were never seen and a fist needed the grip
     // pressed past fist_squeeze (0.85) - nearly the left shield's squeeze. Without finger data a light squeeze
-    // (fist_squeeze_nofingers, 0.25) is the fist; the left shield still needs the firm grip (g_gripHeld, past 0.55, held)
+    // (fist_squeeze_nofingers, 0.25) is the fist; the left shield still needs the firm grip (g_shieldGrip, D-293)
     static const float lightSqueeze = config::GetFloat("fist_squeeze_nofingers", 0.25f);
     if (!H.fingersValid) return H.squeeze >= lightSqueeze;
     const float three = (H.fingerCurl[2] + H.fingerCurl[3] + H.fingerCurl[4]) / 3.f;
     return H.squeeze >= FistSqueeze() || three >= curl;
 }
 bool LeftShieldActive(const vr::HandState& L, ULONGLONG now, Mode mode) {
-    if (!g_gripHeld[0] || OverShoulder(L)) return false;
+    if (!g_shieldGrip || OverShoulder(L)) return false;
     if (mode != Mode::Bare && mode != Mode::Rage) return true;
     static const ULONGLONG delay = (ULONGLONG)config::GetFloat("shield_delay_ms", 150.f);
     return g_gripLSince && now - g_gripLSince >= delay && now - g_lastLeftPunch >= 400;
@@ -343,11 +347,15 @@ void UpdateSwing(const vr::HandState& R, const vr::HandState& L, XINPUT_GAMEPAD*
     // HOLD the Y button and it closes both fists - but it must not close the left shield"): no finger data on either
     // hand -> both fists while the left upper button (Y) is held; the grips no longer make fists there (the left grip
     // is only the shield). gowvr.ini fist_on_y 0 = the right-grip squeeze as before
+    // D-293 (owner: "for Meta Quest: you have to press Y to activate fists instead of holding Y"): the press switches
+    // them on until the next press (VrGamepad). The press that opens the hands counts at once: fist_hold_ms only bridges
+    // finger sensing dropouts
     static const bool fistOnY = config::GetFloat("fist_on_y", 1.f) > 0.5f;
-    const bool noFingers = fistOnY && !L.fingersValid && !R.fingersValid;
-    const bool fistR0 = noFingers ? L.b : FistHand(R);
+    const bool noFingers = fistOnY && g_noFingers.load();
+    const bool fistR0 = noFingers ? g_fistsOn.load() : FistHand(R);
     if (L.fingersValid ? FistHand(L) : fistR0) fistSeen[0] = now;
     if (fistR0) fistSeen[1] = now;
+    if (noFingers && !fistR0) fistSeen[0] = fistSeen[1] = 0;
     const bool fistL = fistSeen[0] && now - fistSeen[0] <= fistHold, fistR = fistSeen[1] && now - fistSeen[1] <= fistHold;
     const bool fistsReady = fistR || fistL;
     {
@@ -789,6 +797,8 @@ std::atomic<ULONGLONG> g_hudPeekAt{0};
 // D-218: only while the controller mapping keeps running (a paused headset / VR off never leaves the bars forced on)
 bool HudPeek() { return g_hudPeek.load() && GetTickCount64() - g_hudPeekAt.load() < 300; }
 
+bool FistsClosed() { return g_fistsClosed.load(); }
+
 bool VrGamepad(XINPUT_GAMEPAD* g) {
     if (!g_on.load()) return false;
     vr::InputSnapshot s = vr::XrInput();
@@ -796,7 +806,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     const bool fresh = s.serial != g_lastSerial;
     if (fresh) { g_lastSerial = s.serial; g_lastSerialTick = now; }
     if (!s.focused || now - g_lastSerialTick > 250) {  // stale or not focused: neutral, and forget held grips
-        g_gripHeld[0] = g_gripHeld[1] = false;
+        g_gripHeld[0] = g_gripHeld[1] = g_shieldGrip = false;
         return false;
     }
     *g = XINPUT_GAMEPAD{};
@@ -950,6 +960,22 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     }
     if (!g_gripHeld[0]) g_gripLSince = 0;
     else if (!g_gripLSince) g_gripLSince = now;
+    // D-293: "no finger sensing" (Meta Quest, D-240) = neither hand's fingers read for finger_lost_ms (5 s). The interaction
+    // profile can't tell (PS VR2 on SteamVR reports oculus/touch_controller too) and one frame without data must not count:
+    // PS VR2 / Index drop single frames (D-038), which would flip the Y latch or drop a held shield there
+    static const ULONGLONG fingerLost = (ULONGLONG)config::GetFloat("finger_lost_ms", 5000.f);
+    static ULONGLONG fingersAt = 0;
+    if (L.fingersValid || R.fingersValid) fingersAt = now;
+    g_noFingers = !fingersAt || now - fingersAt > fingerLost;
+    // D-293 (owner: "for Meta Quest: you have to fully squeeze the left grip for the shield to open"): without finger
+    // sensing the shield needs shield_squeeze_nofingers (0.9) and drops 0.15 below it. Other controllers: as g_gripHeld.
+    // Only the shield - the over-shoulder weapon grab keeps the normal grip
+    {
+        static const float full = config::GetFloat("shield_squeeze_nofingers", 0.9f);
+        const float q = s.hand[0].squeeze;
+        g_shieldGrip = !g_noFingers.load() ? g_gripHeld[0] : s.hand[0].active && q > (g_shieldGrip ? full - 0.15f : full);
+    }
+    g_fistsClosed = g_fistsOn.load() && g_noFingers.load() && fp::FpMode() == 1 && (CurMode() == Mode::Bare || CurMode() == Mode::Rage);
     // D-204 (owner: "after throwing the axe a lot, the attack motion doesn't trigger attacks - I wait, unequip and equip
     // and then it usually works"; owner log: the axe caught and thrown again about every second from 861 s on, no aiming
     // in the game, the swings "-> F1 aimed throw" with the right trigger free): aiming was any left-trigger pull past
@@ -1003,15 +1029,27 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         g->bLeftTrigger = !aimLatch ? 0 : aimByPress ? 255 : Trigger(L.trigger, 0.25f);  // aim (D-204: only while aiming; D-286)
         // shield; in F1 not while the left hand reaches over the shoulder for the Blades (D-043)
         // D-068: bare-handed / in Rage (F1) the shield waits a moment after the fist closes (see LeftShieldActive)
-        if (fp::FpMode() == 1 && !plain ? LeftShieldActive(L, now, CurMode()) : g_gripHeld[0]) g->wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+        // D-293: the full squeeze (g_shieldGrip) in third person too; on a 2D screen L1 is a menu button, not the shield
+        if (fp::FpMode() == 1 && !plain ? LeftShieldActive(L, now, CurMode()) : screen2D ? g_gripHeld[0] : g_shieldGrip)
+            g->wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
         if (L.a) g->wButtons |= XINPUT_GAMEPAD_X;                          // Atreus
-        // D-240: bare-handed / in Rage without finger sensing, Y held is the fists - not the game's Y (unless the axe is out
+        // D-240: bare-handed / in Rage without finger sensing, Y is the fists - not the game's Y (unless the axe is out
         // of the hand, thrown: then it recalls as always)
-        const bool yIsFists = motion && config::GetFloat("fist_on_y", 1.f) > 0.5f && !L.fingersValid && !R.fingersValid &&
+        // D-293: a press switches them on / off (was: held). Not in the plain-button scenes and on 2D screens (!plain): Y
+        // is the game's Y there, and a press in a menu must not flip the fists unseen
+        const bool yIsFists = !plain && config::GetFloat("fist_on_y", 1.f) > 0.5f && g_noFingers.load() &&
                               fp::FpMode() == 1 && (CurMode() == Mode::Bare || CurMode() == Mode::Rage) && !fp::AxeThrown();
         if (L.b && !yIsFists) g->wButtons |= XINPUT_GAMEPAD_Y;             // recall axe / triangle
         static bool lbPrev = false;
-        if (L.b && !lbPrev) fp::AxeRequest(true);                          // a recall: the axe may land in the IK hand
+        if (L.b && !lbPrev) {
+            fp::AxeRequest(true);                                          // a recall: the axe may land in the IK hand
+            g_fistsBeforeY = g_fistsOn.load();                             // the all-four chord takes this press back
+            if (yIsFists) {
+                g_fistsOn = !g_fistsBeforeY;
+                static int logs = 0;
+                if (logs++ < 60) Log("vrmap: Y -> fists %s (D-293)", g_fistsOn.load() ? "on" : "off");
+            }
+        }
         lbPrev = L.b;
         // sprint (D-079: not while the both-sticks combo is down; a lone click after 60 ms or as a pulse, see above)
         if (lc && !combo && !lClickSent && now - lClickSince >= 60) lClickSent = true;
@@ -1141,6 +1179,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             chordOn = true;
             holdSent = false;
             chordSince = now;
+            g_fistsOn = g_fistsBeforeY;  // D-293: Y was part of the chord, not a press for the fists
         }
         if (chordOn) {
             if (!L.a && !L.b && !R.a && !R.b) {
