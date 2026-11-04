@@ -7,6 +7,7 @@
 #include "body.h"
 #include "combat.h"
 #include "movelog.h"
+#include "manual.h"
 #include "../stereo/headcam.h"
 #include "../stereo/eyes.h"
 #include "../stereo/mutate.h"
@@ -682,6 +683,10 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
             eye[0] = gp[0] + cg * off[0] + sg * off[2] + co[0];
             eye[1] = gp[1] + off[1] + co[1];
             eye[2] = gp[2] - sg * off[0] + cg * off[2] + co[2];
+            {   // D-307c: climbing by hand - the view kept clear of the rope / wall (manual.cpp)
+                float mv[3];
+                if (ManualViewPush(mv)) { eye[0] += mv[0]; eye[1] += mv[1]; eye[2] += mv[2]; }
+            }
         }
         calibMode = 1;
         *base = YawFrame(gameCam.m[2][0], gameCam.m[2][2], eye);  // view yaw (detached, see mutate.cpp CamSync)

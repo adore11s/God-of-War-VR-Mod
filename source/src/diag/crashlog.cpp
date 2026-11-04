@@ -138,6 +138,7 @@ const HookSite kBindSrvTable = {"BindSrvTable_guard", 0x1409a0cd0, 5,  // mov r1
 // whether its draw is recorded (caller sub_14060f070: `if (sub_1405b55b0(..)) sub_1405b53d0(..)`): an item whose pass
 // (*item) has no +0xb8 table is now skipped whole - not drawn that frame - and logged.
 std::atomic<uint64_t> g_unbuiltPassCalls{0};  // D-220: counted by the frame-job stub (below)
+std::atomic<uint64_t> g_noHeroCalls{0};        // D-301: counted by the player-distance stub (below)
 using PFN_DrawState = uint64_t(__fastcall*)(int64_t* state, int64_t* item, int64_t cache);
 PFN_DrawState o_DrawState = nullptr;
 std::atomic<uint64_t> g_emptyPasses{0};
@@ -151,6 +152,13 @@ uint64_t __fastcall hk_DrawState(int64_t* state, int64_t* item, int64_t cache) {
             seen = c;
             Log("guard: frame job call on an unbuilt pass object skipped (%llu so far) - first-person mode %d, cinematic %d "
                 "(D-220)", (unsigned long long)c, fp::FpMode(), fp::InCinematic() ? 1 : 0);
+        }
+        static uint64_t seenHero = 0;  // D-301
+        const uint64_t h = g_noHeroCalls.load(std::memory_order_relaxed);
+        if (h != seenHero && (seenHero < 5 || h - seenHero >= 1000 || h <= 5)) {
+            seenHero = h;
+            Log("guard: player-distance check while Kratos is not there (a load) skipped (%llu so far, D-301)",
+                (unsigned long long)h);
         }
     }
     if (pass && *(const int64_t*)(pass + 0xb8) == 0) {
@@ -379,6 +387,41 @@ bool InstallPassJobGuard() {
     // 24: (DetourStub appends the jmp back to 0x1404b9f49)
     if (n != 24) return false;
     return DetourStub(kPassJob, s, n);
+}
+
+// D-301 (owner: "why did it crash right now when I loaded my save"; crash 2026-11-03 12:00:18, GoW+0x8d2ea5 reading 0x8,
+// a job thread 0.7 s after the load's fade-out): sub_1408d2e60(float distSq) - called from sub_1408d5b40 (sm_core
+// sub_14057cc20 <- sub_14057d340 <- sub_14057ec80 <- the job sub_14060f070) - reads the player manager *0x1422e7d50,
+// then its hero +8 and the hero's object +8 with no null check (its own check covers only the manager). During the save
+// load the hero slot was already empty (rdi = [mgr + 8] = 0). A stub at its entry returns before the function runs when
+// the manager is there but the hero or the hero's object is not, and counts it; otherwise it does the replaced
+// `mov r11, rsp; push rdi; sub rsp, 0xe0` and goes on. No register but rax is touched (not an argument here)
+const HookSite kPlayerDist{"PlayerDist_guard", 0x1408d2e60, 11,
+    {0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x00, 0x00, 0x00, 0x41, 0x0f, 0x29, 0x73, 0xe8}};
+bool InstallPlayerDistGuard() {
+    const uint64_t mgr = (uint64_t)GameVa(0x1422e7d50ull);
+    if (!mgr) return false;
+    uint8_t s[64];
+    int n = 0;
+    auto B = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) s[n++] = x; };
+    auto Q = [&](uint64_t v) { for (int i = 0; i < 8; ++i) s[n++] = (uint8_t)(v >> (8 * i)); };
+    B({0x48, 0xb8}); Q(mgr);               //  0 mov rax, &manager
+    B({0x48, 0x8b, 0x00});                 // 10 mov rax, [rax]
+    B({0x48, 0x85, 0xc0});                 // 13 test rax, rax
+    B({0x74, 0x21});                       // 16 jz 51 (no manager: the game's own check returns)
+    B({0x48, 0x8b, 0x40, 0x08});           // 18 mov rax, [rax+8]     hero
+    B({0x48, 0x85, 0xc0});                 // 22 test rax, rax
+    B({0x74, 0x09});                       // 25 jz 36
+    B({0x48, 0x8b, 0x40, 0x08});           // 27 mov rax, [rax+8]     hero's object
+    B({0x48, 0x85, 0xc0});                 // 31 test rax, rax
+    B({0x75, 0x0f});                       // 34 jnz 51
+    B({0x48, 0xb8}); Q((uint64_t)&g_noHeroCalls);  // 36 mov rax, &g_noHeroCalls
+    B({0xf0, 0x48, 0xff, 0x00});           // 46 lock inc qword [rax]
+    B({0xc3});                             // 50 ret (nothing pushed yet)
+    B({0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x00, 0x00, 0x00});  // 51 the replaced prologue
+    // 62: (DetourStub appends the jmp back to 0x1408d2e6b)
+    if (n != 62) return false;
+    return DetourStub(kPlayerDist, s, n);
 }
 
 // ---- D-112 crash reports ------------------------------------------------------------------------------------------
@@ -635,6 +678,8 @@ void InstallCrashGuards() {
     Log("guard: unbuilt pass object guard (sub_1404b9e80 frame job, D-220) %s", ok3 ? "installed" : "NOT installed");
     const bool ok4 = InstallDrawCmdGuards();
     Log("guard: dead object draw command guards (sub_14060f070, D-220d) %s", ok4 ? "installed" : "NOT installed");
+    const bool ok5 = InstallPlayerDistGuard();
+    Log("guard: player-distance check without Kratos (sub_1408d2e60, D-301) %s", ok5 ? "installed" : "NOT installed");
 }
 
 void InstallCrashLog() {

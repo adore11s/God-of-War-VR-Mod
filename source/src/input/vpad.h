@@ -21,10 +21,6 @@ bool PlayerAimInput();
 // mouse (raw input) - within the last 150 ms
 bool ExternalLookActive();
 bool GameBlockHeld();     // D-080: L1 (block / shield) in the buttons the game last received
-// D-262: a finger on the PlayStation pad's touchpad while on (the game's own "Touch" combat HUD call); HudTouchPossible
-// = the game reads the mod's PlayStation pad (PlayStation mode, the pad opened)
-void SetHudTouch(bool on);
-bool HudTouchPossible();
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms);
 uint64_t VpadPolls();
 

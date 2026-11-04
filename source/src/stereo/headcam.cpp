@@ -240,11 +240,23 @@ bool HeadcamPrepare() {
     return true;
 }
 
-bool HeadcamArm(vr::EyeViews* used) {
+bool HeadcamArm(vr::EyeViews* used, bool mono) {
     if (!g_prepValid) return false;
     SetEyeFov(g_prepTx, g_prepTy);
-    SetEyePoses(true, &g_prepD[0], &g_prepD[1], g_level);
-    if (used) *used = g_prepUsed;
+    // D-294 mono: the one kick renders from the head's centre (the eyes share the orientation; ParallelViews makes canted
+    // ones parallel) with the symmetric frustum that already covers both eyes. Both submitted views get that pose, so
+    // the runtime shows the same picture to both eyes, as if far away (no stereo depth); each eye is still cropped to its
+    // own frustum (xr.cpp)
+    if (mono) SetEyePoses(true, &g_prepCenter, &g_prepCenter, g_level);
+    else SetEyePoses(true, &g_prepD[0], &g_prepD[1], g_level);
+    if (used) {
+        *used = g_prepUsed;
+        if (mono) {
+            vr::Pose c = used->pose[0];
+            for (int j = 0; j < 3; ++j) c.p[j] = 0.5f * (used->pose[0].p[j] + used->pose[1].p[j]);
+            used->pose[0] = used->pose[1] = c;
+        }
+    }
     return true;
 }
 
@@ -313,7 +325,114 @@ static void SmoothHand(int h, Mat4& e) {
     e = f[h];
 }
 
-void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2]) {
+// D-295 (owner: "a VR settings option to turn on weight for the axe - when you equip the axe in first person motion
+// controls it has some weight, like Blade & Sorcery"): there a held weapon is a physics body joined to the hand - a heavy
+// one trails a fast move, keeps going a little when the hand stops, and turns slower than the wrist. Here the drawn right
+// hand (the axe sits in it) follows its controller through a damped spring on position (axe_weight_hz, 3.8 Hz) and on
+// rotation (axe_weight_rot_hz, 3 Hz - the head's leverage), damping axe_weight_damping (0.6: a small swing past the
+// stop). In tracking space, after D-239's smoothing: walking with the stick or turning does not drag it, the room does.
+// The trail is held to axe_weight_max_lag (0.35 m) / axe_weight_max_deg (75); a jump beyond 0.6 m (a recenter) starts it
+// again from the controller. Fades in / out over 150 ms (the axe caught / thrown, the setting switched). Only the drawn
+// hand: swings, throws and gestures still read the raw controller (vrmap). gowvr.ini axe_weight (VR settings panel
+// "Axe weight (first person)", live; default 0 = off)
+static Mat4 RowRotation(const float k[3], float angle) {  // row-vector rotation about the unit world axis k
+    const float c = cosf(angle), s = sinf(angle), t = 1.f - c, x = k[0], y = k[1], z = k[2];
+    Mat4 m{};
+    m.m[0][0] = t * x * x + c;     m.m[0][1] = t * x * y + s * z; m.m[0][2] = t * x * z - s * y;
+    m.m[1][0] = t * x * y - s * z; m.m[1][1] = t * y * y + c;     m.m[1][2] = t * y * z + s * x;
+    m.m[2][0] = t * x * z + s * y; m.m[2][1] = t * y * z - s * x; m.m[2][2] = t * z * z + c;
+    m.m[3][3] = 1.f;
+    return m;
+}
+// the world rotation vector (axis x angle) that turns basis `from` onto basis `to` (row vectors: to = from x W)
+static void RotationError(const Mat4& from, const Mat4& to, float r[3]) {
+    float W[3][3];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) W[i][j] = from.m[0][i] * to.m[0][j] + from.m[1][i] * to.m[1][j] + from.m[2][i] * to.m[2][j];
+    const float v[3] = {0.5f * (W[1][2] - W[2][1]), 0.5f * (W[2][0] - W[0][2]), 0.5f * (W[0][1] - W[1][0])};  // sin x axis
+    const float sn = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    const float cs = 0.5f * (W[0][0] + W[1][1] + W[2][2] - 1.f);
+    const float ang = atan2f(sn, cs);
+    const float f = sn > 1e-6f ? ang / sn : 1.f;
+    for (int i = 0; i < 3; ++i) r[i] = v[i] * f;
+}
+static void AxeWeight(Mat4& e, bool tracked, bool held) {
+    static bool have = false;
+    static Mat4 s;                  // the weighted hand (tracking space)
+    static float vel[3] = {}, angVel[3] = {};
+    static float blend = 0.f;       // 0 the controller .. 1 the weighted hand
+    static LARGE_INTEGER last{}, qf{};
+    if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    const float gap = last.QuadPart ? (float)(now.QuadPart - last.QuadPart) / (float)qf.QuadPart : 1.f;
+    last = now;
+    const bool on = held && tracked && config::GetFloat("axe_weight", 0.f) > 0.5f;
+    if (!tracked || gap > 0.1f || gap <= 0.f) { have = false; blend = on ? blend : 0.f; }
+    blend = on ? fminf(1.f, blend + gap / 0.15f) : fmaxf(0.f, blend - gap / 0.15f);
+    if (blend <= 0.f) { have = false; return; }
+    // D-297 (owner after D-295: "add a bit more weight to the axe"): 3.8 / 3 Hz (were 5 / 4) - about a third more trail
+    static const float hz = fminf(fmaxf(config::GetFloat("axe_weight_hz", 3.8f), 1.f), 30.f);
+    static const float rotHz = fminf(fmaxf(config::GetFloat("axe_weight_rot_hz", 3.f), 1.f), 30.f);
+    static const float zeta = fminf(fmaxf(config::GetFloat("axe_weight_damping", 0.6f), 0.2f), 2.f);
+    static const float maxLag = fminf(fmaxf(config::GetFloat("axe_weight_max_lag", 0.35f), 0.02f), 0.6f);
+    static const float maxRad = fminf(fmaxf(config::GetFloat("axe_weight_max_deg", 75.f), 5.f), 150.f) * 0.0174533f;
+    const float dp[3] = {e.m[3][0] - s.m[3][0], e.m[3][1] - s.m[3][1], e.m[3][2] - s.m[3][2]};
+    if (have && dp[0] * dp[0] + dp[1] * dp[1] + dp[2] * dp[2] > 0.36f) have = false;  // a recenter: start again
+    if (!have) {
+        s = e;
+        for (int i = 0; i < 3; ++i) vel[i] = angVel[i] = 0.f;
+        have = true;
+        static int logs = 0;
+        if (on && logs++ < 10) Log("headcam: axe weight on (spring %.1f Hz, turn %.1f Hz, damping %.2f, D-295)", hz, rotHz, zeta);
+    }
+    const float w = 6.2831853f * hz, wr = 6.2831853f * rotHz;
+    const int steps = (int)ceilf(gap / 0.004f);  // semi-implicit Euler, 4 ms steps (stable for these springs)
+    const float h = gap / (float)steps;
+    for (int n = 0; n < steps; ++n) {
+        for (int i = 0; i < 3; ++i) {
+            vel[i] += (w * w * (e.m[3][i] - s.m[3][i]) - 2.f * zeta * w * vel[i]) * h;
+            s.m[3][i] += vel[i] * h;
+        }
+        float r[3];
+        RotationError(s, e, r);
+        for (int i = 0; i < 3; ++i) angVel[i] += (wr * wr * r[i] - 2.f * zeta * wr * angVel[i]) * h;
+        const float a = sqrtf(angVel[0] * angVel[0] + angVel[1] * angVel[1] + angVel[2] * angVel[2]);
+        if (a * h > 1e-7f) {
+            const float k[3] = {angVel[0] / a, angVel[1] / a, angVel[2] / a};
+            const Mat4 R = RowRotation(k, a * h);
+            Mat4 b = s;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) b.m[i][j] = s.m[i][0] * R.m[0][j] + s.m[i][1] * R.m[1][j] + s.m[i][2] * R.m[2][j];
+            for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) s.m[i][j] = b.m[i][j];
+        }
+    }
+    OrthonormalizeKeepScale(s);
+    {   // the trail's limits
+        float d[3] = {e.m[3][0] - s.m[3][0], e.m[3][1] - s.m[3][1], e.m[3][2] - s.m[3][2]};
+        const float dl = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (dl > maxLag) {
+            for (int i = 0; i < 3; ++i) { s.m[3][i] = e.m[3][i] - d[i] * (maxLag / dl); vel[i] *= 0.5f; }
+        }
+        float r[3];
+        RotationError(s, e, r);
+        const float ang = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+        if (ang > maxRad) {
+            const float k[3] = {r[0] / ang, r[1] / ang, r[2] / ang};
+            const Mat4 R = RowRotation(k, ang - maxRad);
+            Mat4 b = s;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) b.m[i][j] = s.m[i][0] * R.m[0][j] + s.m[i][1] * R.m[1][j] + s.m[i][2] * R.m[2][j];
+            for (int i = 0; i < 3; ++i) { for (int j = 0; j < 3; ++j) s.m[i][j] = b.m[i][j]; angVel[i] *= 0.5f; }
+        }
+    }
+    if (blend >= 1.f) { e = s; return; }
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 3; ++j) e.m[i][j] += (s.m[i][j] - e.m[i][j]) * blend;
+    OrthonormalizeKeepScale(e);
+}
+
+void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2], bool axeHeld) {
     if (g_handSim) {
         for (int h = 0; h < 2; ++h) {
             Mat4 e{};
@@ -342,10 +461,12 @@ void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2]) {
     vr::InputSnapshot s = vr::XrInput();
     for (int h = 0; h < 2; ++h) {
         valid[h] = s.focused && s.hand[h].active && (g_prepGripValid[h] || s.hand[h].gripValid);
+        if (h == 1 && !valid[h]) { Mat4 none{}; AxeWeight(none, false, false); }  // D-295: the trail starts again
         if (!valid[h]) continue;
         // D-110: the grip predicted for the eyes' display time when located, else this frame's (one frame older)
         Mat4 e = Mul(FromPose(g_prepGripValid[h] ? g_prepGrip[h] : s.hand[h].grip), g_originInv);
         SmoothHand(h, e);  // D-239
+        if (h == 1) AxeWeight(e, true, axeHeld);  // D-295
         if (g_lockPos.load())
             for (int j = 0; j < 3; ++j) e.m[3][j] -= g_headT[j];  // hands relative to the (pinned) head
         for (int j = 0; j < 3; ++j) e.m[3][j] *= g_scale;

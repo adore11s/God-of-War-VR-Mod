@@ -79,6 +79,7 @@ std::atomic<bool> g_shotReq{false}, g_shotReady{false};
 std::vector<uint8_t> g_shotPx[2];
 // D-241 AFR: the frame's eye + views, queued at the frame's submission (game thread), taken at its Present (render thread)
 std::atomic<bool> g_afr{false};
+std::atomic<bool> g_mono{false};  // D-294: with g_afr - every frame eye 0's slot, its picture for both eyes
 struct AfrEntry { int eye = 0; vr::EyeViews v; };
 SRWLOCK g_afrLock = SRWLOCK_INIT;
 AfrEntry g_afrQ[4];
@@ -162,7 +163,7 @@ void ReadbackEyes(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     for (int e = 0; e < 2; ++e) {
         ID3D11Texture2D* st = nullptr;
         if (FAILED(dev->CreateTexture2D(&sd, nullptr, &st))) return;
-        ctx->CopyResource(st, g_eyeTex[e]);
+        ctx->CopyResource(st, g_eyeTex[g_mono.load() ? 0 : e]);  // D-294: mono shows eye 0's picture to both
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m))) {
             g_shotPx[e].assign((uint8_t*)m.pData, (uint8_t*)m.pData + (size_t)m.RowPitch * sd.Height);
@@ -283,15 +284,25 @@ void EyesOnPresent(IDXGISwapChain* sc) {
         g_afrEyeViews[e.eye] = e.v;
         g_afrHave[e.eye] = e.v.valid;
         const uint64_t k = ++g_afrCaps;
+        const bool mono = g_mono.load();
         if (k <= 4 || k % 900 == 0)
-            Log("eyes: AFR frame #%llu - eye %d captured (missing %llu, dropped %llu)", (unsigned long long)k, e.eye,
-                (unsigned long long)g_afrMissing.load(), (unsigned long long)g_afrDropped.load());
-        if (!g_afrHave[0] || !g_afrHave[1]) return;
-        const int o = e.eye ^ 1;
-        g_pairViews = e.v;  // this frame's (display time, serial ...) with the other eye as it was rendered
-        g_pairViews.pose[o] = g_afrEyeViews[o].pose[o];
-        g_pairViews.fov[o] = g_afrEyeViews[o].fov[o];
-        g_pairViews.ownFov[o] = g_afrEyeViews[o].ownFov[o];
+            Log("eyes: %s frame #%llu - eye %d captured (missing %llu, dropped %llu)", mono ? "mono" : "AFR",
+                (unsigned long long)k, e.eye, (unsigned long long)g_afrMissing.load(), (unsigned long long)g_afrDropped.load());
+        if (mono) {  // D-294: the one picture for both eyes, with its views (both at the head's centre)
+            if (!e.v.valid) return;
+            g_pairViews = e.v;
+        } else {
+            if (!g_afrHave[0] || !g_afrHave[1]) return;
+            const int o = e.eye ^ 1;
+            g_pairViews = e.v;  // this frame's (display time, serial ...) with the other eye as it was rendered
+            g_pairViews.afrStale = o;  // D-310: and what this frame would have used for it
+            g_pairViews.afrNowPose = e.v.pose[o];
+            g_pairViews.afrNowFov = e.v.fov[o];
+            g_pairViews.afrNowOwnFov = e.v.ownFov[o];
+            g_pairViews.pose[o] = g_afrEyeViews[o].pose[o];
+            g_pairViews.fov[o] = g_afrEyeViews[o].fov[o];
+            g_pairViews.ownFov[o] = g_afrEyeViews[o].ownFov[o];
+        }
         g_pairThisFrame = true;
         if (g_shotReq.exchange(false)) {
             ID3D11Device* dev = nullptr;
@@ -340,8 +351,10 @@ void EyesEnable(bool on) {
 }
 
 bool EyesEnabled() { return g_on.load(); }
-void EyesAfr(bool on) {
-    if (g_afr.exchange(on) == on) return;
+void EyesAfr(bool on, bool mono) {
+    mono = on && mono;
+    const bool monoWas = g_mono.exchange(mono);
+    if (g_afr.exchange(on) == on && monoWas == mono) return;
     AcquireSRWLockExclusive(&g_afrLock);
     g_afrHead = g_afrN = 0;
     ReleaseSRWLockExclusive(&g_afrLock);
@@ -350,7 +363,9 @@ void EyesAfr(bool on) {
     g_afrFrameStart = true;
     g_pendingN = 0;
     for (auto& slot : g_eye0LastStream) slot = nullptr;
-    Log("eyes: AFR %s", on ? "on - one eye per frame, the other eye's last image reprojected" : "off - both eyes every frame");
+    Log("eyes: %s", mono ? "mono - one picture from the head's centre for both eyes"
+                    : on ? "AFR on - one eye per frame, the other eye's last image reprojected"
+                         : "AFR / mono off - both eyes every frame");
 }
 void EyesAfrKick(int eye) {
     g_afrPending.eye = eye & 1;
@@ -358,19 +373,21 @@ void EyesAfrKick(int eye) {
     g_afrPendingValid = true;
 }
 bool EyesAfrOn() { return g_afr.load(std::memory_order_relaxed); }
+bool EyesMonoOn() { return g_mono.load(std::memory_order_relaxed); }
 int EyesRenderEye() { return g_renderEye.load(std::memory_order_relaxed); }
 
 void EyesSetFrameViews(const vr::EyeViews& v) { g_frameViews = v; }
 
 bool EyesPair(ID3D11Texture2D** eye0, ID3D11Texture2D** eye1, vr::EyeViews* views) {
     if (!g_pairThisFrame || !g_eyeTex[0] || !g_eyeTex[1]) return false;
-    if (g_capGen[0] != g_eyeGen || g_capGen[1] != g_eyeGen) {  // an eye copied into textures made again since
+    const int e1 = g_mono.load() ? 0 : 1;  // D-294: mono - eye 0's picture for both eyes
+    if (g_capGen[0] != g_eyeGen || g_capGen[e1] != g_eyeGen) {  // an eye copied into textures made again since
         static int logs = 0;
         if (logs++ < 10) Log("eyes: pair skipped - the eye textures were made again between the two eyes' copies");
         return false;
     }
     *eye0 = g_eyeTex[0];
-    *eye1 = g_eyeTex[1];
+    *eye1 = g_eyeTex[e1];
     *views = g_pairViews;
     return true;
 }

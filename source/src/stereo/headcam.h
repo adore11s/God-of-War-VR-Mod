@@ -8,13 +8,16 @@ namespace gowvr::stereo {
 // report the views + rendered FoV the frame is drawn with (for the submitted layer). False: no valid views yet.
 bool HeadcamPrepare();
 // Game thread, before kick 1: arm the eye cameras computed by the last HeadcamPrepare; `used` = views + rendered FoV.
-bool HeadcamArm(vr::EyeViews* used);
+// D-294 mono: both eye cameras at the head's centre, and both views of `used` there too (one picture for both eyes).
+bool HeadcamArm(vr::EyeViews* used, bool mono = false);
 // Head-centred camera (eye midpoint, same orientation) + frustum of the last prepare, for view A at View::Update.
 bool HeadcamCenter(Mat4* center, float* tx, float* ty, bool* level);
 void HeadcamOverscan(float marginDeg, int predictFrames);
 // Controller grip poses in game world space for this frame's base (same chain as the eyes: pose relative to the
 // re-center origin, scaled, composed onto `base`). valid[h] false if that hand is not tracked.
-void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2]);
+// D-295: axeHeld (first person, motion controls, the axe in the right hand) = with gowvr.ini axe_weight the right hand
+// carries the axe's weight (it trails the controller through a spring); once a frame, the game thread.
+void HeadcamHandsWorld(const Mat4& base, Mat4 out[2], bool valid[2], bool axeHeld = false);
 void HeadcamHandSim(bool on);
 void HeadcamHandSimLock(bool on);    // diagnostic: simulated hands ignore the fplook head turn
 void HeadcamHandSimMove(float amp);

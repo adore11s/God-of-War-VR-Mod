@@ -17,11 +17,13 @@ void SetCameraSyncStick(float x, float y = 0.f);
 // Gameplay first person: rotate the left stick by this yaw (radians) so "forward" walks where the player looks
 // (the game moves relative to its own camera). 0 = off.
 void SetLocomotionYaw(float rad);
-// D-218: the left hand is held at the head - show the combat HUD (health / Spartan Rage / runic / talisman) meanwhile.
-// Any thread.
-bool HudPeek();
+// D-311: the left hand is held at the left side of the head (gameplay first person, Compass = Head) - the compass is
+// shown meanwhile (stereo/mutate.cpp). Any thread.
+bool LeftHandAtHead();
 // D-293: controllers without finger sensing - the fists are switched on with Y and no weapon is out: both hands are drawn
 // closed. Any thread.
 bool FistsClosed();
+// D-307: the grip (with its hysteresis; the Index's squeeze force, D-305) is held on this hand (0 left, 1 right). Any thread.
+bool GripHeld(int h);
 
 }  // namespace gowvr::input

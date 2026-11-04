@@ -65,6 +65,7 @@ add_library(gowvr SHARED
   src/fp/movelog.cpp
   src/fp/combat.cpp
   src/fp/walls.cpp
+  src/fp/manual.cpp
   src/fp/posdiag.cpp
   src/core/config.cpp
   src/input/vrmap.cpp

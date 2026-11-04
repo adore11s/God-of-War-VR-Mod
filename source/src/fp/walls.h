@@ -22,5 +22,7 @@ bool WallsStep(const float from[3], const float to[3], float out[3]);
 bool WallsClearPath(const float from[3], const float to[3]);
 // D-231: the attack-walking wall cast is on (walls_f1 and attack_walk_walls)
 bool WallsAttackActive();
+// D-307: the game's ray cast a -> b against what blocks Kratos (game thread): true + the hit point
+bool WallsRay(const float a[3], const float b[3], float hit[3]);
 
 }  // namespace gowvr::fp

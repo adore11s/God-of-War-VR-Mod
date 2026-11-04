@@ -6,6 +6,7 @@
 #include "../input/vpad.h"
 #include "../frame/rendersize.h"
 #include "../stereo/mutate.h"
+#include "../stereo/lodprobe.h"
 #include "../fp/firstperson.h"
 #include "../fp/arms.h"
 #include <windows.h>
@@ -18,12 +19,13 @@ namespace gowvr::vr {
 namespace {
 
 // panel pixels (D-253: 11 rows of kRow + the hints; D-283 12, D-284 13, D-286 15, D-288 16, D-289 14; D-292 13 rows and two
-// hint lines: 122 + 13 x 120 + 116)
-constexpr int kW = 1000, kH = 1798;
+// hint lines: 122 + 13 x 120 + 116; D-295 14 rows: 122 + 14 x 120 + 116; D-298 13 rows again; D-300 14: 122 + 14 x 120 + 116;
+// D-304 13 again: 122 + 13 x 120 + 116; D-307 15: 122 + 15 x 120 + 116; D-311 16: 122 + 16 x 120 + 116)
+constexpr int kW = 1000, kH = 2158;
 // D-253: the first row's label, the row pitch (D-288: 16 rows - 120: label 40 + 4 + button 64 + 12, the panel as tall
 // as with 15 rows of 128)
 constexpr int kTop = 122, kRow = 120, kLabelH = 40, kButtonY = 44, kButtonH = 64;
-constexpr float kPanelW = 1.2f;             // metres (D-253: 11 rows; D-289: 14 rows of 120 px, as tall as 13 of 128 were)
+constexpr float kPanelW = 1.2f;             // metres (D-253: 11 rows; D-289 / D-295: 14 rows of 120 px; D-298: 13)
 constexpr float kGap = 0.15f;               // between the screen and the panel
 constexpr int kCursorPx = 64;
 
@@ -34,7 +36,8 @@ const int kSizes[] = {1440, 1728, 2048, 2304, 2560, 2816};
 enum Action {
     kNone, kTurnSmooth, kTurnSnap, kStepDown, kStepUp, kPadXbox, kPadPs, kWallsOn, kWallsOff, kSizeDown, kSizeUp,
     kFinisherFp, kFinisherTp, kAfrOn, kAfrOff, kMotionOn, kMotionOff, kF1On, kF1Off, kF3On, kF3Off,
-    kBarsHead, kBarsHand, kAimHold, kAimPress, kHandDown, kHandUp
+    kCompassAlways, kCompassHead, kAimHold, kAimPress, kHandDown, kHandUp, kMonoOn, kAxeWeightOn, kAxeWeightOff,
+    kClimbOn, kClimbOff, kRowOn, kRowOff
 };
 struct Button { RECT r; Action a; const wchar_t* text; bool selected; };
 
@@ -72,12 +75,17 @@ bool Walls() { return config::GetFloat("walls_f1", 1.f) > 0.5f; }
 // fp/firstperson.cpp FinisherScene)
 bool FinisherTp() { return config::GetFloat("finisher_third_person", 1.f) > 0.5f; }
 bool Afr() { return config::GetFloat("afr_rendering", 0.f) > 0.5f; }         // D-241
+bool Mono() { return config::GetFloat("mono_rendering", 0.f) > 0.5f; }       // D-294 (r1.cpp: it wins over AFR)
+bool AxeWeight() { return config::GetFloat("axe_weight", 0.f) > 0.5f; }      // D-295 (stereo/headcam.cpp)
 bool Motion() { return config::GetFloat("motion_controls", 1.f) > 0.5f; }    // D-244 (fp::MotionControls reads it)
 // (D-289, owner: "remove the distant model detail and hide aiming icon options from VR settings" - D-283's "Distant model
 // detail" and D-286's "Axe aiming icon" rows are gone; gowvr.ini lod_scale / aim_icon_hide still work)
-// D-284 (xr.cpp, mutate.cpp read it live); D-291 (owner: "make the left hand UI default for everyone"): on by default
-bool BarsHand() { return config::GetFloat("hud_bars_hand", 1.f) > 0.5f; }
+// D-311 (owner: "an option in VR settings: Compass (first person) Always / Head"): gowvr.ini compass_fp (stereo/mutate.cpp
+// CompassTick, input/vrmap.cpp read it live); 0 Always = the game's own compass (the default)
+bool CompassHead() { return config::GetFloat("compass_fp", 0.f) > 0.5f; }
 bool AimPress() { return config::GetFloat("aim_toggle", 0.f) > 0.5f; }          // D-286 (input/vrmap.cpp)
+bool ClimbManual() { return config::GetFloat("manual_climb", 0.f) > 0.5f; }     // D-307 (fp/manual.cpp)
+bool RowManual() { return config::GetFloat("manual_row", 0.f) > 0.5f; }         // D-308 (fp/manual.cpp)
 
 void Apply(Action a) {
     switch (a) {
@@ -103,14 +111,26 @@ void Apply(Action a) {
         case kWallsOff: config::SetFloat("walls_f1", 0.f); break;
         case kFinisherFp: config::SetFloat("finisher_third_person", 0.f); break;
         case kFinisherTp: config::SetFloat("finisher_third_person", 1.f); break;
-        case kAfrOn: config::SetFloat("afr_rendering", 1.f); break;
-        case kAfrOff: config::SetFloat("afr_rendering", 0.f); break;
+        // D-294: Native / AFR / Mono - one choice, both keys written (mono_rendering wins over afr_rendering)
+        case kAfrOn: config::SetFloat("afr_rendering", 1.f); config::SetFloat("mono_rendering", 0.f); break;
+        case kAfrOff: config::SetFloat("afr_rendering", 0.f); config::SetFloat("mono_rendering", 0.f); break;
+        case kMonoOn: config::SetFloat("afr_rendering", 0.f); config::SetFloat("mono_rendering", 1.f); break;
+        case kAxeWeightOn: config::SetFloat("axe_weight", 1.f); break;  // D-295
+        case kAxeWeightOff: config::SetFloat("axe_weight", 0.f); break;
+        // (D-304, owner: "remove the LOD scaler in VR settings and make level 3 (highest) the default" - D-300's "Texture
+        // detail" row is gone; gowvr.ini vr_texture_detail still works, its automatic value is now 3)
         case kMotionOn: config::SetFloat("motion_controls", 1.f); break;
         case kMotionOff: config::SetFloat("motion_controls", 0.f); break;
-        case kBarsHead: config::SetFloat("hud_bars_hand", 0.f); break;  // D-284
-        case kBarsHand: config::SetFloat("hud_bars_hand", 1.f); break;
-        case kAimHold:  // D-286 config::SetFloat("aim_toggle", 0.f); break;
+        case kCompassAlways: config::SetFloat("compass_fp", 0.f); break;  // D-311
+        case kCompassHead: config::SetFloat("compass_fp", 1.f); break;
+        // D-286; D-295: the Hold line had its code inside the comment - Hold fell through to Press (both set Press)
+        case kAimHold: config::SetFloat("aim_toggle", 0.f); break;
         case kAimPress: config::SetFloat("aim_toggle", 1.f); break;
+        // D-307 / D-308 (owner: "in VR settings a manual climbing option" / "a manual boat rowing option")
+        case kClimbOn: config::SetFloat("manual_climb", 1.f); break;
+        case kClimbOff: config::SetFloat("manual_climb", 0.f); break;
+        case kRowOn: config::SetFloat("manual_row", 1.f); break;
+        case kRowOff: config::SetFloat("manual_row", 0.f); break;
         // D-288 (a Meta Quest 2 player: "when I hold the axe with my hand pointing forward its top points backward, as if
         // turned 90 degrees - maybe hand rotation offsets in the VR settings"): F5 / F6's wrist pitch for this headset's
         // controllers (gowvr.ini wristpitch_<psvr2 | quest | other>), 5 degrees a click
@@ -142,11 +162,13 @@ void Apply(Action a) {
     }
     g_needDraw = true;
     Log("panel: %d -> turning %s, speed %.0f%%, snap %.0f deg, pad %s, walls %s, picture %.0f%s, finishers %s, "
-        "rendering %s, motion controls %s", (int)a,
+        "rendering %s, motion controls %s, axe weight %s, aiming %s, climbing %s, rowing %s, compass %s", (int)a,
         Snap() ? "snap" : "smooth", config::GetFloat("turn_speed", 1.f) * 100.f,
         config::GetFloat("snap_turn_degrees", 45.f), input::PadMode() ? "PlayStation" : "Xbox", Walls() ? "on" : "off",
         config::GetFloat("render_size", 2048.f), frame::AutoRenderSize() ? " (auto)" : "",
-        FinisherTp() ? "third person" : "first person", Afr() ? "AFR" : "native", Motion() ? "on" : "off");
+        FinisherTp() ? "third person" : "first person", Mono() ? "mono" : Afr() ? "AFR" : "native", Motion() ? "on" : "off",
+        AxeWeight() ? "on" : "off", AimPress() ? "press" : "hold", ClimbManual() ? "manual" : "game",
+        RowManual() ? "manual" : "game", CompassHead() ? "head" : "always");
 }
 
 bool MakeSurface() {
@@ -209,6 +231,9 @@ struct Row {
     const wchar_t *ta, *tb; // their texts (nullptr: a stepper)
     bool selA;              // the first choice is the selected one (two choices only)
     int value;              // stepper: 0 = turning step, 1 = picture size, 2 = hand angle
+    Action c = kNone;       // D-294: a third choice (Rendering method: Native / AFR / Mono)
+    const wchar_t* tc = nullptr;
+    int sel = 0;            // with a third choice: the selected one (0 a, 1 b, 2 c)
 };
 int Rows(Row* r) {
     const bool snap = Snap();
@@ -218,18 +243,24 @@ int Rows(Row* r) {
     r[n++] = {L"Finishers perspective", kFinisherFp, kFinisherTp, L"First person", L"Third person", !FinisherTp(), 0};
     r[n++] = {L"Motion controls (first person)", kMotionOn, kMotionOff, L"On", L"Off", Motion(), 0};
     r[n++] = {L"Hand angle (tilt the hands and the axe)", kHandDown, kHandUp, nullptr, nullptr, false, 2};  // D-288
-    r[n++] = {L"Health bars (first person)", kBarsHead, kBarsHand, L"Head", L"Left hand", !BarsHand(), 0};  // D-284
+    r[n++] = {L"Axe weight (first person)", kAxeWeightOn, kAxeWeightOff, L"On", L"Off", AxeWeight(), 0};  // D-295
+    r[n++] = {L"Manual climbing (first person)", kClimbOn, kClimbOff, L"On", L"Off", ClimbManual(), 0};  // D-307
+    r[n++] = {L"Manual rowing (first person)", kRowOn, kRowOff, L"On", L"Off", RowManual(), 0};        // D-308
+    // D-311: Always = the game's own compass; Head = only while the left hand is held at the left side of the head.
+    // (D-298 removed the health UI row; D-311 removed the head UI code itself - the bars are always on the left hand)
+    r[n++] = {L"Compass (first person)", kCompassAlways, kCompassHead, L"Always", L"Head", !CompassHead(), 0};
     r[n++] = {L"Aiming mode (left trigger)", kAimHold, kAimPress, L"Hold", L"Press", !AimPress(), 0};
     r[n++] = {L"Wall collision (first person)", kWallsOn, kWallsOff, L"On", L"Off", Walls(), 0};
     r[n++] = {L"Turning (first person)", kTurnSmooth, kTurnSnap, L"Smooth", L"Snap", !snap, 0};
     r[n++] = {snap ? L"Snap angle" : L"Turning speed", kStepDown, kStepUp, nullptr, nullptr, false, 0};
     r[n++] = {L"Controller buttons", kPadXbox, kPadPs, L"Xbox", L"PlayStation", input::PadMode() == 0, 0};
     r[n++] = {L"VR picture size (per eye)", kSizeDown, kSizeUp, nullptr, nullptr, false, 1};
-    r[n++] = {L"Rendering method", kAfrOff, kAfrOn, L"Native", L"AFR", !Afr(), 0};
+    r[n++] = {L"Rendering method", kAfrOff, kAfrOn, L"Native", L"AFR", false, 0, kMonoOn, L"Mono",
+              Mono() ? 2 : Afr() ? 1 : 0};  // D-294
     // (D-292, owner: "remove On and Off for VR in the VR settings panel" - F9 still switches VR)
     return n;
 }
-constexpr int kMaxRows = 13;
+constexpr int kMaxRows = 16;
 
 void Layout(wchar_t* stepText, wchar_t* sizeText, wchar_t* handText) {
     g_nButtons = 0;
@@ -238,7 +269,11 @@ void Layout(wchar_t* stepText, wchar_t* sizeText, wchar_t* handText) {
     for (int i = 0; i < n; ++i) {
         const Row& r = rows[i];
         const int y = kTop + i * kRow + kButtonY;
-        if (r.ta) {
+        if (r.tc) {  // D-294: three choices across the same width (40 .. 960, gaps 40)
+            AddButton(40, y, 280, kButtonH, r.a, r.ta, r.sel == 0);
+            AddButton(360, y, 280, kButtonH, r.b, r.tb, r.sel == 1);
+            AddButton(680, y, 280, kButtonH, r.c, r.tc, r.sel == 2);
+        } else if (r.ta) {
             AddButton(40, y, 440, kButtonH, r.a, r.ta, r.selA);
             AddButton(520, y, 440, kButtonH, r.b, r.tb, !r.selA);
         } else {
@@ -275,7 +310,8 @@ void Draw() {
         if (!rows[i].ta) {  // the stepper's value box
             const int by = y + kButtonY;
             Fill({200, by, 800, by + kButtonH}, RGB(30, 30, 32), 14);
-            Text(rows[i].value == 1 ? sizeText : rows[i].value == 2 ? handText : stepText, {200, by, 800, by + kButtonH},
+            Text(rows[i].value == 1 ? sizeText : rows[i].value == 2 ? handText : stepText,
+                 {200, by, 800, by + kButtonH},
                  g_fButton, white, DT_CENTER | DT_VCENTER);
         }
     }
@@ -422,11 +458,12 @@ bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, cons
     }
     // redraw when a value or the hovered button changed (values: also changed with F10 / F11 or a gowvr.ini edit)
     char state[128];
-    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d %d %d %d %d %d %.0f", Snap() ? 1 : 0, config::GetFloat("turn_speed", 1.f),
-              config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(), Walls() ? 1 : 0,
-              config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0, Afr() ? 1 : 0,
-              Motion() ? 1 : 0, fp::GameplayFP() ? 1 : 0, fp::CutsceneFP() ? 1 : 0, BarsHand() ? 1 : 0, AimPress() ? 1 : 0,
-              fp::ArmsWristPitch());
+    sprintf_s(state, "%d %.2f %.0f %d %d %.0f %d %d %d %d %d %d %d %d %.0f %d %d %d %d", Snap() ? 1 : 0,
+              config::GetFloat("turn_speed", 1.f), config::GetFloat("snap_turn_degrees", 45.f), input::PadMode(),
+              Walls() ? 1 : 0, config::GetFloat("render_size", 2048.f), frame::AutoRenderSize(), FinisherTp() ? 1 : 0,
+              Afr() ? 1 : 0, Motion() ? 1 : 0, fp::GameplayFP() ? 1 : 0, fp::CutsceneFP() ? 1 : 0, CompassHead() ? 1 : 0,
+              AimPress() ? 1 : 0, fp::ArmsWristPitch(), Mono() ? 1 : 0, AxeWeight() ? 1 : 0, ClimbManual() ? 1 : 0,
+              RowManual() ? 1 : 0);
     if (hover != g_hover || strcmp(state, g_lastState) != 0 || g_needDraw) {
         g_hover = hover;
         strcpy_s(g_lastState, state);

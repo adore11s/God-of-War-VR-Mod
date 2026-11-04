@@ -10,6 +10,7 @@
 #include "../fp/firstperson.h"
 #include "../fp/combat.h"
 #include "../fp/arms.h"
+#include "../fp/manual.h"
 #include "../stereo/mutate.h"
 #include "vpad.h"
 #include "turning.h"
@@ -787,17 +788,19 @@ BYTE Trigger(float v, float threshold) {
     return (BYTE)lrintf(fminf((v - threshold) / (1.f - threshold), 1.f) * 255.f);
 }
 
-// D-218: the left hand held at the head (combat HUD shown); written by VrGamepad, read by the HUD tick (stereo/mutate.cpp)
+// D-311: the left hand held at the left side of the head (the compass shown in Compass "Head" mode); written by
+// VrGamepad, read by the compass tick (stereo/mutate.cpp)
 std::atomic<bool> g_hudPeek{false};
 bool g_headSwitchB = false;  // D-252: the right B press that switched first person (kept from the game until released)
 std::atomic<ULONGLONG> g_hudPeekAt{0};
 
 }  // namespace
 
-// D-218: only while the controller mapping keeps running (a paused headset / VR off never leaves the bars forced on)
-bool HudPeek() { return g_hudPeek.load() && GetTickCount64() - g_hudPeekAt.load() < 300; }
+// only while the controller mapping keeps running (a paused headset / VR off never leaves the compass forced on)
+bool LeftHandAtHead() { return g_hudPeek.load() && GetTickCount64() - g_hudPeekAt.load() < 300; }
 
 bool FistsClosed() { return g_fistsClosed.load(); }
+bool GripHeld(int h) { return h >= 0 && h < 2 && g_gripHeld[h]; }  // D-307
 
 bool VrGamepad(XINPUT_GAMEPAD* g) {
     if (!g_on.load()) return false;
@@ -898,25 +901,27 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         if (!bNow) g_headSwitchB = false;
         bDown = bNow;
     }
-    // D-218 (owner: "when I move my left hand to my head and hold it there, show my health, Spartan Rage and runic
-    // bars"): the left hand within head_peek_m (0.22 m) of the eyes - in front of / beside the head (not more than 0.10 m
-    // behind the face plane: the over-shoulder Blades grab is further back), between 0.30 m below and 0.15 m above
-    // the eyes - for head_peek_ms (250) shows the combat HUD until it leaves (0.05 m hysteresis). No button involved;
-    // the hand's buttons still reach the game. A light buzz on the left controller when the bars come up
-    // D-262 (owner: "the health HUD rule shouldn't apply outside first person - it's supposed to be just for the first
-    // person modes"; "not visible during combat"): only in first person (gameplay F1 / cutscene F3); not while the left
-    // grip is squeezed (the shield - a block raises the hand in front of the face) and not more than head_peek_front_m
-    // (0.15) in front of the eyes; the zone reaches higher (0.30 m above the eyes, head_peek_m 0.25) for a hand hovering
-    // over the head
+    // D-218 / D-262's zone (the left hand held at the head): within head_peek_m (0.25 m) of the eyes, not more than
+    // 0.10 m behind the face plane (the over-shoulder Blades grab is further back) nor head_peek_front_m (0.15) in front,
+    // between 0.30 m below and 0.30 m above the eyes, held head_peek_ms (250), 0.05 m hysteresis; not while the left grip
+    // is squeezed (the shield - a block raises the hand in front of the face). No button involved; the hand's buttons
+    // still reach the game. A light buzz on the left controller when it counts.
+    // D-311 (owner: "a VR settings option Compass (first person) Always / Head: with Head the compass only shows as long
+    // as you hold the left hand near the left side of your head; remove the head based UI code but keep the left side of
+    // the head for this"): the combat HUD peek is gone; the zone is now only the LEFT side - the hand at least
+    // head_peek_side_m (0.02) left of the eyes' middle - and only in gameplay first person with Compass = Head
+    // (gowvr.ini compass_fp 1)
     {
         static const float zone = config::GetFloat("head_peek_m", 0.25f);
         static const float front = config::GetFloat("head_peek_front_m", 0.15f);
+        static const float side = config::GetFloat("head_peek_side_m", 0.02f);
         static const ULONGLONG dwell = (ULONGLONG)config::GetFloat("head_peek_ms", 250.f);
         static ULONGLONG since = 0;
         bool in = false;
         float dist = 0.f;
         const int fpm = fp::FpMode();
-        if (L.gripValid && (fpm == 1 || fpm == 2) && !g_gripHeld[0]) {
+        const bool compassHead = config::GetFloat("compass_fp", 0.f) > 0.5f;
+        if (L.gripValid && fpm == 1 && compassHead && !g_gripHeld[0]) {
             vr::EyeViews v = vr::XrLatestViews();
             if (v.valid) {
                 float d[3];
@@ -928,8 +933,9 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
                     fx /= fn; fz /= fn;
                     dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
                     const float behind = -(d[0] * fx + d[2] * fz), up = d[1];
+                    const float lateral = -d[0] * fz + d[2] * fx;  // + to the head's right (forward x up)
                     const float lim = g_hudPeek.load() ? zone + 0.05f : zone;
-                    in = dist < lim && behind < 0.10f && behind > -front && up > -0.30f && up < 0.30f;
+                    in = dist < lim && behind < 0.10f && behind > -front && up > -0.30f && up < 0.30f && lateral < -side;
                 }
             }
         }
@@ -940,8 +946,8 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         if (peek != g_hudPeek.load()) {
             g_hudPeek = peek;
             if (peek) vr::XrHaptic(0, 0.25f, 0.03f);
-            Log("vrmap: left hand %s the head (%.2f m) - combat HUD %s (D-218)", peek ? "held at" : "away from", dist,
-                peek ? "shown" : "back to the game's setting");
+            Log("vrmap: left hand %s the left side of the head (%.2f m) - compass %s (D-311)", peek ? "held at" : "away from",
+                dist, peek ? "shown" : "hidden");
         }
     }
     // D-097: scenes that ask for plain button presses (the ogre ride, doors / chests, cranks, combat-sync scenes ...)
@@ -954,9 +960,15 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
     // the view and the head / chord gestures are not motion controls and stay (they use plainScene)
     const bool motion = fp::MotionControls();
     const bool plain = plainScene || (fp::FpMode() == 1 && !motion);
+    // D-305 (a Valve Index player: "the grips are too sensitive - the whole handle is the grip; the Meta Quest / PS VR2 have
+    // a grip button"): the Index's grip is now its squeeze FORCE (xr.cpp) - resting fingers read 0 like a PS VR2 grip
+    // button that is touched but not pressed, so the Index takes the PS VR2 setup (finger sensing for the fists, a press
+    // for grip actions). A force press counts past index_grip_on (0.35), lets go below index_grip_off (0.20)
+    static const float idxOn = config::GetFloat("index_grip_on", 0.35f), idxOff = config::GetFloat("index_grip_off", 0.20f);
     for (int h = 0; h < 2; ++h) {  // grip hysteresis: press above 0.55, release below 0.40
         float q = s.hand[h].squeeze;
-        g_gripHeld[h] = s.hand[h].active && (g_gripHeld[h] ? q > 0.40f : q > 0.55f);
+        const float on = s.hand[h].squeezeForce ? idxOn : 0.55f, off = s.hand[h].squeezeForce ? idxOff : 0.40f;
+        g_gripHeld[h] = s.hand[h].active && (g_gripHeld[h] ? q > off : q > on);
     }
     if (!g_gripHeld[0]) g_gripLSince = 0;
     else if (!g_gripLSince) g_gripLSince = now;
@@ -1157,6 +1169,9 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         g_draw.prevGrip = g_gripHeld[1];
         g_draw.pressUntil = 0;
     }
+    // D-307 / D-308: climbing / rowing by hand - the stick from the pulls / paddle strokes, the climb button for a grip at
+    // an offered climb, Y flips the paddle in the boat; the grips are no R1 / L1 then
+    if (fp::FpMode() == 1) fp::ManualPad(s, g);
     // D-162 (owner: "for the PlayStation and Xbox schemes: pressing all 4 buttons - A X Y B / cross square triangle circle -
     // triggers the Options button; the PSVR2 Sense controllers don't have it"): all four face buttons held = Options
     // (Start) for as long as they are; the face buttons themselves go nowhere from then until all four are released (no

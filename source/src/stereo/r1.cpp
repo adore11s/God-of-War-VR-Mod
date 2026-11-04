@@ -11,6 +11,7 @@
 #include "mutate.h"
 #include "dlsseyes.h"
 #include "taaeyes.h"
+#include "lodprobe.h"
 #include "../fp/body.h"
 #include <windows.h>
 #include <atomic>
@@ -487,9 +488,10 @@ void DataDiffWrite(const char* file) {
 
 std::atomic<uint64_t> g_kicks{0};  // D-083 loadwatch
 std::atomic<int> g_kickPhase{0};   // D-099 crash log: where the main thread is in the frame's kicks
-struct KickPhaseReset { ~KickPhaseReset() { g_kickPhase = 0; } };
+struct KickPhaseReset { ~KickPhaseReset() { g_kickPhase = 0; StreamReqNote(false); } };  // (D-296: after the last kick)
 void __fastcall hk_Kick() {
     ++g_kicks;
+    StreamReqNote(true);  // D-296: the streaming request demand of the frame before
     const KickPhaseReset phaseReset;
     g_kickPhase = 4;
     if (g_diffMode.load() == 2) {  // control: .data across one normal frame (pre-kick N vs pre-kick N+1)
@@ -527,43 +529,57 @@ void __fastcall hk_Kick() {
         // one kick per frame, the eyes alternating (about half the GPU work); the other eye shows its last image at the
         // pose it was rendered with (the runtime reprojects it). Each eye keeps its own histories (eye_history_fix, DLSS /
         // TAA per eye: every other frame). Switched live from gowvr.ini afr_rendering (VR settings panel)
+        // D-294 (owner: "add Mono rendering to the VR settings panel"): mono = the same single kick, every frame, from the
+        // head's centre with the frustum that covers both eyes; that picture goes to both eyes (eyes.cpp), the views both
+        // at the centre - no stereo depth (the world looks far away), about half the GPU work like AFR but without AFR's
+        // eye-to-eye time difference on moving things. One history (eye 0's DLSS / TAA every frame). Switched live from
+        // gowvr.ini mono_rendering (VR settings panel "Rendering method: Mono"; it wins over afr_rendering)
         {
-            static bool afrWas = false;
-            const bool afr = g_vr.load() && EyesEnabled() && config::GetFloat("afr_rendering", 0.f) > 0.5f;
-            if (afr != afrWas) {
-                afrWas = afr;
-                EyesAfr(afr);
+            static int modeWas = 0;  // 0 native, 1 AFR, 2 mono
+            const bool single = g_vr.load() && EyesEnabled();
+            const bool mono = single && config::GetFloat("mono_rendering", 0.f) > 0.5f;
+            const bool afr = single && !mono && config::GetFloat("afr_rendering", 0.f) > 0.5f;
+            const int mode = mono ? 2 : afr ? 1 : 0;
+            if (mode != modeWas) {
+                modeWas = mode;
+                EyesAfr(mode != 0, mono);
                 ResetEyeHistory();
                 TaaEyesReset();
-                Log("r1: AFR rendering %s", afr ? "ON (one eye per frame, alternating)" : "off (both eyes every frame)");
+                Log("r1: rendering %s", mono ? "MONO (one picture from the head's centre for both eyes, D-294)"
+                                        : afr ? "AFR ON (one eye per frame, alternating)" : "native (both eyes every frame)");
             }
-            if (afr) {
+            if (mode) {
                 static int afrEye = 1;
-                afrEye ^= 1;
+                if (afr) afrEye ^= 1;
+                const int eye = mono ? 0 : afrEye;
                 ++g_skinFrame;
                 g_skinEye = -1;  // (one kick: its skinning keeps the game's own previous pose)
                 bool headOn = false;
                 if (g_vr.load()) {
                     vr::EyeViews used;
-                    headOn = HeadcamArm(&used);
+                    headOn = HeadcamArm(&used, mono);
                     EyesSetFrameViews(headOn ? used : vr::EyeViews{});
-                    if (headOn) { EyeFrameBegin(); SetEyeIndex(afrEye); }
+                    if (headOn) { EyeFrameBegin(); SetEyeIndex(eye); }
                 }
-                if (g_eyesOn && !headOn) { SetEyeIndex(afrEye); SetEyeCamera(true, g_eyeOff[afrEye], g_eyeYawDeg[afrEye]); }
-                EyesAfrKick(afrEye);
+                if (g_eyesOn && !headOn) {
+                    SetEyeIndex(eye);
+                    SetEyeCamera(true, mono ? 0.5f * (g_eyeOff[0] + g_eyeOff[1]) : g_eyeOff[eye], g_eyeYawDeg[eye]);
+                }
+                EyesAfrKick(eye);
                 fp::BodyHideDrawBegin();
                 fp::WaitHeroFrame();
                 fp::BodyHideEnsure();
-                fp::EyeProbe(afrEye ? 2 : 0);
-                g_kickPhase = afrEye ? 3 : 1;
+                fp::EyeProbe(eye ? 2 : 0);
+                g_kickPhase = eye ? 3 : 1;
                 o_Kick();
                 g_kickPhase = 0;
-                fp::EyeProbe(afrEye ? 3 : 1);
+                fp::EyeProbe(eye ? 3 : 1);
                 fp::BodyHideDrawEnd();
                 if (headOn) SetEyePoses(false, nullptr, nullptr, false);
                 else if (g_eyesOn) SetEyeCamera(false, 0.f, 0.f);
                 const uint64_t k = ++g_doubled;
-                if (k <= 5 || k % 1000 == 0) Log("r1: AFR kick #%llu (eye %d)", (unsigned long long)k, afrEye);
+                if (k <= 5 || k % 1000 == 0)
+                    Log("r1: %s kick #%llu (eye %d)", mono ? "mono" : "AFR", (unsigned long long)k, eye);
                 if (--g_double == 0) Log("r1: double-kick window over (%llu frames)", (unsigned long long)g_doubled.load());
                 return;
             }
@@ -599,6 +615,7 @@ void __fastcall hk_Kick() {
         bool diff = g_diffMode.load() == 1;
         if (diff) DataSnap(g_diffA);  // note: taken after kick 1 returns; see pre-kick snapshot below
         BetweenEyes(g_mask.load());
+        StreamReqNote(false);  // D-296: eye 0's pass drained
         if (snap) Snap("after-between");
         if (diff) {
             DataSnap(g_diffB);
@@ -625,20 +642,43 @@ void __fastcall hk_Kick() {
         // previous frame's eye-0 streams still upload from when the render thread executes them (PassParticles ->
         // sub_140588220 records copies from CPU memory). Wait until the render thread has reached Present for every
         // submitted frame (completed 0x142d50678 == submitted 0x142d50670; completed is incremented before Present).
+        // D-309 (Quest / Virtual Desktop testers: "coloured god rays from fires, item bags, crystals - gone in AFR, back in
+        // native after a while"): the wait gave up after 200 ms and kick 2 went on - and its effects job then rewrote the
+        // slot the lagging render thread had not uploaded yet: F-013's garbage particles (glowing streaks in the effect's
+        // own colour) for as long as the render thread kept lagging. VDXR tester log: 85 such give-ups in one session,
+        // the owner's PS VR2 logs: 0. AFR / Mono kick once a frame (the slots rotate once) - why they never showed it.
+        // Now the wait goes on while the render thread is behind, up to gowvr.ini sync_wait_ms (default 1500; 200 = the
+        // old behaviour); every wait over 200 ms is logged with how it ended.
         if (g_mask.load() & 0x20000) {
+            static const double capMs = [] {
+                const float v = config::GetFloat("sync_wait_ms", 1500.f);
+                return (double)(v < 200.f ? 200.f : v > 10000.f ? 10000.f : v);
+            }();
+            static uint64_t longWaits = 0;
             LARGE_INTEGER f, t0, t1;
             QueryPerformanceFrequency(&f);
             QueryPerformanceCounter(&t0);
             int spins = 0;
+            bool capped = false;
             while (G<uint64_t>(0x142d50670) != G<uint64_t>(0x142d50678)) {
                 QueryPerformanceCounter(&t1);
-                if ((t1.QuadPart - t0.QuadPart) * 1000 > f.QuadPart * 200) { ++g_syncTimeouts; break; }
-                if (++spins < 64) YieldProcessor(); else Sleep(0);
+                const double waited = double(t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
+                if (waited > capMs) { ++g_syncTimeouts; capped = true; break; }
+                if (++spins < 64) YieldProcessor();
+                else Sleep(waited > 50.0 ? 1 : 0);  // a long stall: stop burning a core
             }
             QueryPerformanceCounter(&t1);
             double ms = double(t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
             g_syncMsSum += ms;
             if (ms > g_syncMsMax) g_syncMsMax = ms;
+            if (ms > 200.0) {
+                const uint64_t n = ++longWaits;
+                if (n <= 20 || n % 50 == 0)
+                    Log("r1: the render thread was %.0f ms behind before eye 1 - %s (#%llu, D-309, sync_wait_ms %.0f)", ms,
+                        capped ? "still behind, eye 1 rendered anyway (its particles may glitch)"
+                               : "waited until it caught up (no particle glitch)",
+                        (unsigned long long)n, capMs);
+            }
         }
         // Effects job once per frame (0x10000): its per-frame upload rings have 3 slots and must advance once per frame;
         // advancing twice reused a slot ~1.5 frames later while the GPU could still draw eye 0 from it (F-013).

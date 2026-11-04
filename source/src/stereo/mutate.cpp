@@ -13,6 +13,7 @@
 #include "../fp/combat.h"
 #include "../fp/walls.h"
 #include "../fp/movelog.h"
+#include "../fp/manual.h"
 #include "../core/config.h"
 #include "../input/vrmap.h"
 #include "../input/vpad.h"
@@ -528,16 +529,91 @@ void UiScaleView(uint8_t* view) {
 // game saves it - the old builds' F1 value got saved that way and came back in third person as "Touch". A 2 found in
 // combat_hud_restore (or, until the pause menu is first opened, in the byte outside F1) is taken as that leftover once
 // (gowvr.ini combat_hud_v262): the player's setting becomes On
+// D-311 (owner: "add an option in VR settings: Compass (first person) Always / Head - with Head it only displays the
+// compass UI as long as you hold the left hand near the left side of your head"; "Always should just be the game's
+// normal rendering"). STATIC - r_ui.wad mainhud.lua (Lua 5.2 bytecode read with tools/re/_luadis.py): UpdateCompass =
+// compassPriorityList:GetAvailable() ? ShowCompass (Compass.Show, AlphaFade("Compass", 0.6, 0.5 s)) : HideCompass
+// (Compass.Hide, AlphaFade("Compass", 0, 0.5 s)); its "HUD Display Setting" item is HandleDisplaySetting(
+// game.UI.GetUserCompassSetting()) = hidden for 0 (Off), or 2 (Touch) without a touch - the Combat HUD's own rule (D-102:
+// 0 Off, 1 On, 2 Touch). SetUserCompassSetting (sub_140763250) writes byte 0x14107910a (profile bits 12-13,
+// win_platform_008 / _009). UpdateCompass runs from UpdateHUD - on EVT_REFRESH_HUD (the settings menu sends it after
+// SetUserCompassSetting) and on EVT_TOUCH_STARTED / _ENDED; the game itself sends EVT_TOUCH_ENDED (sub_14075a0d0,
+// UI_CALL_EVENT, its own thread) the frame its touch timer 0x141079150 passes 3.5 s (EVT_TOUCH_ENDED = touchPad false +
+// UpdateHUD(false): the same refresh as 3.5 s after any touchpad touch). So with Head, in gameplay first person, the
+// byte is 1 while the left hand is at the left side of the head (input::LeftHandAtHead) and 0 otherwise, and on each
+// change the timer is put just under 3.5 s: next frame the game refreshes the HUD and the compass fades in / out its
+// own way, markers and distance labels with it (a second nudge 200 ms later covers a write lost to the game's own
+// timer update). The player's own setting stays underneath: it is back in the byte outside first person, on every 2D
+// screen (the pause menu shows / changes / saves it), and while a profile save is pending (0x1422c6930, set before
+// sub_140663b70 writes the profile; held at most 3 s); gowvr.ini compass_restore / compass_forced put it back next
+// session if the game ended while forced. Always (compass_fp 0, the default): the mod does not touch the compass
+void CompassTick(bool menu) {
+    uint8_t* c = (uint8_t*)GameVa(0x14107910aull);
+    float* touchT = (float*)GameVa(0x141079150ull);
+    const uint8_t* savePending = (const uint8_t*)GameVa(0x1422c6930ull);
+    const ULONGLONG now = GetTickCount64();
+    static bool forcing = false;
+    static uint8_t real = 1;
+    static int shown = -1, leftover = -1;
+    static ULONGLONG nudgeAgain = 0, saveSince = 0;
+    auto nudge = [&](bool again) {
+        *touchT = 3.499f;  // the game passes 3.5 next frame -> EVT_TOUCH_ENDED -> UpdateHUD -> UpdateCompass
+        nudgeAgain = again ? now + 200 : 0;
+    };
+    if (nudgeAgain && now >= nudgeAgain) { nudgeAgain = 0; *touchT = 3.499f; }
+    if (leftover < 0) leftover = config::GetFloat("compass_forced", 0.f) > 0.5f ? 1 : 0;
+    const bool head = config::GetFloat("compass_fp", 0.f) > 0.5f;
+    const bool f1 = fp::FpMode() == 1 && !menu;
+    if (f1 && head) {
+        if (!forcing) {
+            forcing = true;
+            leftover = 0;
+            real = *c <= 2 ? *c : (uint8_t)1;
+            config::SetFloat("compass_restore", (float)real);
+            config::SetFloat("compass_forced", 1.f);
+            shown = -1;
+            Log("hud: Compass (first person) = Head - shown only with the left hand at the left side of the head (the "
+                "game's own compass setting %d kept underneath, D-311)", (int)real);
+        }
+        if (*savePending) { if (!saveSince) saveSince = now; } else saveSince = 0;
+        const bool holdReal = saveSince && now - saveSince < 3000;  // a profile save is being written: the player's value
+        const int want = input::LeftHandAtHead() ? 1 : 0;
+        const uint8_t put = holdReal ? real : (uint8_t)want;
+        if (*c != put) *c = put;
+        if (want != shown) {
+            shown = want;
+            nudge(true);
+        }
+    } else if (forcing) {
+        forcing = false;
+        *c = real;
+        config::SetFloat("compass_forced", 0.f);
+        nudge(true);
+        Log("hud: compass back to the game's own setting %d (%s, D-311)", (int)real,
+            menu ? "a menu / 2D screen" : !head ? "Compass = Always" : "not in gameplay first person");
+    } else if (leftover == 1 && !menu) {
+        // the game ended while the compass was forced - the profile may hold the forced value: the player's own goes back
+        // until the pause menu is first opened (from then on the player's own changes count)
+        const int restore = (int)config::GetFloat("compass_restore", 1.f);
+        if (restore >= 0 && restore <= 2 && *c != (uint8_t)restore) {
+            *c = (uint8_t)restore;
+            nudge(false);
+            static int logs = 0;
+            if (logs++ < 5) Log("hud: compass setting %d put back (the game ended while Head mode forced it, D-311)", restore);
+        }
+        if (PauseMenuOpen()) {
+            leftover = 0;
+            config::SetFloat("compass_forced", 0.f);
+        }
+    }
+}
+
 void CombatHudTick() {
     static int want = -2;
     if (want == -2) want = (int)config::GetFloat("f1_combat_hud", 2.f);
     uint8_t* v = (uint8_t*)GameVa(0x141078febull);
-    float* touchT = (float*)GameVa(0x141079150ull);
-    // D-218: while the left hand is held at the head the byte shows 1 (On) / stays Touch with the touch; `real` is the
-    // setting underneath it - what the F1 rules below read and change, and what the byte goes back to afterwards
-    static bool peekOn = false;
-    static uint8_t peekReal = 1;
-    uint8_t real = peekOn ? peekReal : *v;
+    // (D-311: the D-218 / D-262 head peek - the byte On / a touchpad touch while the left hand was at the head - is gone)
+    uint8_t real = *v;
     static bool repair = config::GetFloat("combat_hud_v262", 0.f) < 0.5f;
     static bool repairArmed = repair;
     if (repairArmed) {
@@ -550,19 +626,12 @@ void CombatHudTick() {
     }
     const bool menu = Screen2DFrame();
     if (PauseMenuOpen()) repair = false;
-    // D-284: health bars on the left hand (hud_bars_hand, the VR settings panel): in F1 the Combat HUD is On (the bars
-    // always there - xr.cpp puts them on the hand), no head peek; switched live
-    const bool handBars = config::GetFloat("hud_bars_hand", 1.f) > 0.5f;  // D-291: the left hand by default
+    // D-284: health bars on the left hand: in F1 the Combat HUD is On (the bars always there - xr.cpp puts them on the
+    // hand). D-311: always (the head option and its peek are gone; f1_combat_hud -1 still leaves the game's setting alone)
     if (want >= 0 && want <= 2) {
         static bool applied = false;
-        static int lastWant = -1;
-        const int wantNow = handBars ? 1 : want;
+        constexpr int wantNow = 1;
         const bool f1 = fp::FpMode() == 1 && !menu;
-        if (f1 && applied && lastWant >= 0 && wantNow != lastWant && real == lastWant) {
-            real = (uint8_t)wantNow;
-            Log("hud: health bars %s - Combat HUD %d (D-284)", handBars ? "on the hand" : "at the head", wantNow);
-        }
-        lastWant = wantNow;
         if (f1 && !applied) {
             applied = true;
             int cur = real;
@@ -584,26 +653,8 @@ void CombatHudTick() {
             Log("hud: third person - Combat HUD 2 (the old first-person value saved by the game) -> 1 On (D-262)");
         }
     }
-    const int fpm = fp::FpMode();
-    const bool peek = input::HudPeek() && (fpm == 1 || fpm == 2) && !menu && !(handBars && fpm == 1);  // D-284
-    const bool touch = peek && real == 2 && input::HudTouchPossible();
-    input::SetHudTouch(touch);
-    if (peek) {
-        if (!peekOn)
-            Log("hud: left hand at the head - Combat HUD shown %s (setting %d kept underneath, D-218 / D-262)",
-                touch ? "by a touch on the virtual touchpad" : "(On)", (int)real);
-        peekOn = true;
-        peekReal = real;
-        const uint8_t show = touch ? 2 : 1;
-        if (*v != show) *v = show;
-    } else {
-        if (peekOn) {
-            Log("hud: left hand down - Combat HUD back to %d (D-218)", (int)real);
-            if (real == 2 && *touchT < 3.45f) *touchT = 3.45f;  // D-262: gone now, not 3.5 s after the touch
-        }
-        peekOn = false;
-        if (*v != real) *v = real;
-    }
+    if (*v != real) *v = real;
+    CompassTick(menu);  // D-311
 }
 
 // D-107 (owner: "make the cursor move to the centre of the view - in the flat game it's on the right"; "the cursor is
@@ -1237,9 +1288,22 @@ void HeadCameraIntoViewA(uint8_t* view) {
     // motion-controlled arms: gameplay first person only (cutscenes stay authored)
     Mat4 hands[2];
     bool valid[2] = {false, false};
-    const bool armsOn = g_fpBaseValid && fp::FpMode() == 1 && !fp::InBoat();  // boat: both hands authored
-    if (armsOn) HeadcamHandsWorld(g_fpBase, hands, valid);
-    if (armsOn && wallsOn) fp::WallsHands(hands, valid, g_fpBase);  // D-160
+    // boat: both hands authored - D-308: except rowing by hand (the arms on the controllers, the paddle between them)
+    const bool armsOn = g_fpBaseValid && fp::FpMode() == 1 && (!fp::InBoat() || fp::ManualRowActive());
+    if (armsOn) HeadcamHandsWorld(g_fpBase, hands, valid, fp::MotionControls() && fp::AxeInHand());  // D-295
+    // D-307 / D-308: climbing / rowing by hand (pinned hands held on the climbing surface, pulls -> the stick, strokes ->
+    // the boat's stick); every gameplay-F1 frame, hands valid only with the arms on
+    bool wallsSkip[2] = {false, false};
+    if (g_fpBaseValid && fp::FpMode() == 1) {
+        const bool hv[2] = {armsOn && valid[0], armsOn && valid[1]};
+        fp::ManualHands(hands, hv, wallsSkip, g_fpBase, Mul(center, g_fpBase));  // (the view = centre x base)
+    } else {
+        fp::ManualIdle();
+    }
+    if (armsOn && wallsOn) {
+        bool wv[2] = {valid[0] && !wallsSkip[0], valid[1] && !wallsSkip[1]};
+        fp::WallsHands(hands, wv, g_fpBase);  // D-160 (not the hands holding on to a climb)
+    }
     fp::ArmsUpdate(armsOn, hands, valid);
 }
 }  // namespace

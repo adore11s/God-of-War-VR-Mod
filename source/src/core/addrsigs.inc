@@ -3,26 +3,42 @@
 //  kind 0 code: the address = match + dispOff (0, or the length of a neighbour-function prefix)
 //  kind 1 referenced: match + insnEnd + int32 at (match + dispOff) + delta (a RIP-relative use or a rel32 call)
 //  kind 2 section start: pattern = the section's name
+{0x1400e5c90ull, 0, 0, 0, 0, "3d 00 10 00 00 73 ?? 4c 8d 05 ?? ?? ?? ?? 8b c0"},  // src\stereo\lodprobe.cpp
+{0x1400e5c97ull, 0, 0, 0, 0, "4c 8d 05 ?? ?? ?? ?? 8b c0 48 03 c0 4d 89 14 c0"},  // src\stereo\lodprobe.cpp
 {0x1401536c0ull, 0, 0, 0, 0, "40 55 53 41 54 41 56 41 57 48 8d ac 24 10 fd ff ff"},  // src\fp\combat.cpp
+{0x14040a610ull, 0, 0, 0, 0, "48 8b c4 57 41 54 41 55 41 56 41 57 48 81 ec c0 02 00 00"},  // src\stereo\lodprobe.cpp
+{0x14040ac62ull, 0, 0, 0, 0, "b9 94 1e 00 00 48 2b c8 48 89 0d ?? ?? ?? ?? 48 8b 8c 24 b8 02 00 00"},  // src\stereo\lodprobe.cpp
 {0x140410178ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? ff c3 3b 1d ?? ?? ?? ?? 72 ?? 8b 15 ?? ?? ?? ??"},  // src\stereo\eyes.cpp
 {0x140410fd0ull, 0, 0, 0, 0, "48 8b c4 48 89 58 10 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8d a8 f8 fb ff ff"},  // src\stereo\postfx.cpp
 {0x140426da0ull, 0, 0, 0, 0, "41 57 48 83 ec 40 80 3d ?? ?? ?? ?? 00 8b 0d ?? ?? ?? ??"},  // src\stereo\r1.cpp
+{0x1404332f2ull, 0, 0, 0, 0, "b9 00 10 00 00 3b c1 0f 47 c1 85 c0 0f 84 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
+{0x14043330cull, 0, 0, 0, 0, "48 8d 1d ?? ?? ?? ?? 48 89 b4 24 88 00 00 00 8b e8"},  // src\stereo\lodprobe.cpp
+{0x140443390ull, 0, 0, 0, 0, "40 55 57 41 56 41 57 48 83 ec 48 48 8b 05 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
 {0x14044ec50ull, 0, 0, 0, 0, "4c 8b dc 41 56 48 81 ec 60 01 00 00 48 8b 05 ?? ?? ?? ??"},  // src\stereo\r1.cpp
 {0x14045b600ull, 0, 0, 0, 0, "48 89 5c 24 10 57 48 83 ec 20 4c 8b 05 ?? ?? ?? ??"},  // src\stereo\mutate.cpp
 {0x140469990ull, 0, 0, 0, 0, "48 8b 0d ?? ?? ?? ?? 45 33 c0 48 8b 15 ?? ?? ?? ??"},  // src\stereo\r1.cpp
 {0x140469b40ull, 0, 0, 0, 0, "40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ?? 48 85 db 74 ?? ff 15 ?? ?? ?? ??"},  // src\stereo\r1.cpp
 {0x14046c8e0ull, 0, 0, 0, 0, "48 89 5c 24 18 48 89 6c 24 20 56 57 41 54 41 56 41 57 48 83 ec 50"},  // src\stereo\r1.cpp
+{0x14046ef4full, 0, 0, 0, 0, "48 8d 2d ?? ?? ?? ?? 48 89 7c 24 30 4c 89 74 24 38"},  // src\stereo\lodprobe.cpp
+{0x14046f01eull, 0, 0, 0, 0, "3d 00 10 00 00 73 ?? 8b c0 48 03 c0 4c 89 54 c5 00"},  // src\stereo\lodprobe.cpp
 {0x14046f100ull, 0, 0, 0, 0, "48 89 5c 24 18 55 56 57 48 83 ec 50 48 63 69 6c"},  // src\stereo\lodprobe.cpp
 {0x140471c30ull, 0, 0, 0, 0, "48 8b c4 41 55 41 56 41 57 48 81 ec 80 00 00 00"},  // src\fp\body.cpp
 {0x140478980ull, 0, 48, 0, 0, "48 63 c1 48 69 c0 b0 00 00 00 48 03 05 ?? ?? ?? ?? c3 cc cc cc cc cc cc cc cc cc cc cc cc cc cc 8b 05 ?? ?? ?? ?? c3 cc cc cc cc cc cc cc cc cc 40 53"},  // src\stereo\r1.cpp
 {0x14047b6f0ull, 0, 0, 0, 0, "48 89 5c 24 08 48 89 74 24 10 48 89 7c 24 18 4c 89 64 24 20 55 41 56 41 57 48 8d 6c 24 d0"},  // src\fp\movelog.cpp
+{0x1404837d0ull, 0, 0, 0, 0, "48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 48 81 ec 80 00 00 00 48 8b 05 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
+{0x1404842b0ull, 0, 0, 0, 0, "4c 8d 35 ?? ?? ?? ?? 4c 89 7c 24 38 41 bf 00 00 00 80"},  // src\stereo\lodprobe.cpp
+{0x14048437eull, 0, 0, 0, 0, "3d 00 10 00 00 73 ?? 8b c0 48 03 c0 4d 89 14 c6"},  // src\stereo\lodprobe.cpp
+{0x1404b7e86ull, 0, 0, 0, 0, "b8 94 1e 00 00 2b 05 ?? ?? ?? ?? 48 63 d8 48 c1 e3 15"},  // src\stereo\lodprobe.cpp
 {0x1404b9f38ull, 0, 0, 0, 0, "48 8b 89 a8 00 00 00 48 8b 01 48 8d 53 84 ff 50 10"},  // src\diag\crashlog.cpp
 {0x1404baa08ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? ff c3 3b 1d ?? ?? ?? ?? 72 ?? 48 8b 7c 24 30"},  // src\stereo\eyes.cpp
 {0x1404d25b0ull, 0, 0, 0, 0, "4c 8b dc 55 53 57 49 8d ab 18 ff ff ff 48 81 ec d0 01 00 00"},  // src\stereo\mutate.cpp
 {0x1404e81a0ull, 0, 0, 0, 0, "4c 8b dc 49 89 5b 10 49 89 6b 18 56 57 41 56 48 81 ec a0 00 00 00"},  // src\stereo\mutate.cpp
 {0x1405041e0ull, 0, 0, 0, 0, "48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 41 56 48 8b 3d ?? ?? ?? ??"},  // src\fp\body.cpp
 {0x14050e5d0ull, 0, 0, 0, 0, "40 55 56 41 55 48 8d ac 24 c0 fe ff ff 48 81 ec 40 02 00 00"},  // src\stereo\r1.cpp
+{0x14053a6adull, 0, 0, 0, 0, "b9 00 10 00 00 3b c1 0f 47 c1 33 c9 87 0d ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
+{0x14053a6ccull, 0, 0, 0, 0, "48 8d 1d ?? ?? ?? ?? 48 89 6c 24 38 48 89 74 24 40"},  // src\stereo\lodprobe.cpp
 {0x14053e780ull, 0, 0, 0, 0, "4c 8b dc 57 41 54 41 55 41 56 41 57 48 81 ec e0 00 00 00 48 c7 44 24 68 fe ff ff ff"},  // src\fp\walls.cpp
+{0x140549ab0ull, 0, 0, 0, 0, "0f b6 01 f6 d0 a8 01 75 ?? 48 8b 11 4c 8d 15 ?? ?? ?? ??"},  // src\fp\manual.cpp
 {0x1405888e0ull, 0, 0, 0, 0, "44 89 44 24 18 48 89 54 24 10 53 55 56 57 41 54"},  // src\stereo\r1.cpp
 {0x14058b400ull, 0, 0, 0, 0, "48 89 5c 24 18 48 89 74 24 20 57 48 81 ec b0 00 00 00 48 8b 05 ?? ?? ?? ?? 48 33 c4 48 89 84 24 a0 00 00 00 0f b7 b1 ac 00 00 00"},  // src\fp\body.cpp
 {0x14058c560ull, 0, 0, 0, 0, "40 55 53 57 48 8d ac 24 90 fd ff ff 48 81 ec 70 03 00 00"},  // src\fp\body.cpp
@@ -37,11 +53,13 @@
 {0x14060f242ull, 0, 0, 0, 0, "49 8b 4a 20 48 8d 54 24 20 4d 8b 4a 18 4d 8b 42 10 48 8b 01 ff 50 18"},  // src\diag\crashlog.cpp
 {0x14063cde0ull, 0, 0, 0, 0, "40 53 48 83 ec 20 48 8b d9 c7 44 24 30 00 00 00 00"},  // src\stereo\r1.cpp
 {0x140673604ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? 80 3d ?? ?? ?? ?? 00 75 ?? 80 3d ?? ?? ?? ?? 00 74 ?? 45 32 c0"},  // src\stereo\r1.cpp
+{0x140677ba7ull, 0, 0, 0, 0, "b8 94 1e 00 00 4c 8d 15 ?? ?? ?? ?? 2b 05 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
 {0x140698590ull, 0, 0, 0, 0, "48 89 5c 24 08 57 48 83 ec 20 48 8b d9 48 8b 49 18"},  // src\fp\combat.cpp
 {0x1406b8f23ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? 48 83 7e 08 00 0f 84 ?? ?? ?? ?? 0f b6 86 a0 15 00 00"},  // src\fp\combat.cpp
 {0x1406b97a5ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? eb ?? 48 8d 54 24 20 49 8b c8 e8 ?? ?? ?? ??"},  // src\fp\combat.cpp
 {0x1406b9e30ull, 0, 0, 0, 0, "e8 ?? ?? ?? ?? 48 85 f6 74 ?? 0f b6 83 a0 15 00 00"},  // src\fp\combat.cpp
 {0x14071db60ull, 0, 0, 0, 0, "40 53 48 83 ec 20 48 83 79 08 00 48 8b d9 48 63 c2"},  // src\fp\body.cpp, src\fp\combat.cpp
+{0x1407b35a2ull, 0, 0, 0, 0, "b8 94 1e 00 00 2b 05 ?? ?? ?? ?? c1 e0 15 3b 05 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
 {0x1407b3bb0ull, 0, 0, 0, 0, "44 88 4c 24 20 48 89 4c 24 08 53 55 41 56 48 83 ec 60"},  // src\fp\body.cpp
 {0x1407c3850ull, 0, 0, 0, 0, "40 53 48 83 ec 20 48 8b da e8 ?? ?? ?? ?? 80 7b 2b 00"},  // src\fp\combat.cpp
 {0x140803760ull, 0, 0, 0, 0, "48 8b c4 55 56 57 48 8d 68 a1 48 81 ec c0 00 00 00"},  // src\fp\body.cpp
@@ -57,7 +75,10 @@
 {0x1408a54b0ull, 0, 0, 0, 0, "4c 8b dc 55 41 54 41 55 41 56 41 57 49 8d ab 08 ff ff ff"},  // src\fp\combat.cpp
 {0x1408a64f0ull, 0, 0, 0, 0, "48 8b c4 48 89 58 18 48 89 78 20 55 41 54 41 55"},  // src\fp\combat.cpp
 {0x1408a6bc0ull, 0, 0, 0, 0, "48 8b c4 48 89 58 10 55 56 57 41 54 41 55 41 56 41 57 48 8d 68 a9"},  // src\fp\combat.cpp
+{0x1408d2e60ull, 0, 0, 0, 0, "4c 8b dc 57 48 81 ec e0 00 00 00 41 0f 29 73 e8 48 8b 05 ?? ?? ?? ??"},  // src\diag\crashlog.cpp
 {0x140914950ull, 0, 0, 0, 0, "48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20 f7 41 44 00 02 00 00"},  // src\fp\combat.cpp
+{0x14094b75eull, 0, 0, 0, 0, "3d 00 10 00 00 73 ?? 48 8d 15 ?? ?? ?? ?? 8b c0 48 03 c0 48 89 34 c2"},  // src\stereo\lodprobe.cpp
+{0x14094b765ull, 0, 0, 0, 0, "48 8d 15 ?? ?? ?? ?? 8b c0 48 03 c0 48 89 34 c2"},  // src\stereo\lodprobe.cpp
 {0x1409a09c0ull, 1, 1, 5, 0, "e8 ?? ?? ?? ?? 39 1d ?? ?? ?? ?? 76 ??"},  // src\stereo\eyes.cpp
 {0x1409a0cd0ull, 0, 0, 0, 0, "4c 8b dc 41 56 41 57 48 81 ec 58 02 00 00 48 8b 05 ?? ?? ?? ??"},  // src\diag\crashlog.cpp
 {0x1409a7582ull, 0, 0, 0, 0, "41 ff 92 80 01 00 00 ff c3 41 3b 5e 20 72 ?? 48 8b 06"},  // src\diag\cbprobe.cpp, src\stereo\sharpui.cpp
@@ -90,16 +111,24 @@
 {0x140def118ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 48 89 01 48 89 59 68"},  // src\stereo\taaeyes.cpp
 {0x140df8b28ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 48 89 01 48 81 c1 c8 01 00 00"},  // src\stereo\r1.cpp
 {0x14105a000ull, 2, 0, 0, 0, ".data"},  // src\diag\cmd.cpp, src\stereo\r1.cpp
+{0x14105a358ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 48 63 00 48 c1 e0 14"},  // src\stereo\lodprobe.cpp
 {0x14105ee04ull, 1, 2, 7, 0, "6b 1d ?? ?? ?? ?? 68 ba 40 00 00 00"},  // src\diag\crashlog.cpp
 {0x141078febull, 1, 2, 6, 0, "88 0d ?? ?? ?? ?? c1 e8 14 24 03 75 ??"},  // src\diag\cmd.cpp, src\stereo\mutate.cpp
+{0x14107910aull, 1, 2, 6, 0, "88 0d ?? ?? ?? ?? c1 e8 0e 24 03 75 ??"},  // src\stereo\mutate.cpp
 {0x141079150ull, 1, 2, 6, 0, "89 35 ?? ?? ?? ?? eb ?? 32 db 48 8b c8"},  // src\stereo\mutate.cpp
 {0x141188b50ull, 1, 2, 6, 0, "28 05 ?? ?? ?? ?? 0f 11 86 00 02 00 00"},  // src\stereo\postfx.cpp
 {0x141188b60ull, 1, 2, 6, 0, "28 0d ?? ?? ?? ?? 0f 11 8e 10 02 00 00"},  // src\stereo\postfx.cpp
 {0x1411960d0ull, 1, 2, 6, 4, "89 05 ?? ?? ?? ?? c7 05 ?? ?? ?? ?? 00 00 80 3f c7 05 ?? ?? ?? ?? 00 00 80 3f 48 83 c4 28 c3 cc cc cc cc cc cc cc cc cc cc cc cc 48 83 ec 28"},  // src\stereo\r1.cpp
+{0x1411be9b0ull, 1, 2, 6, 0, "8d 0d ?? ?? ?? ?? 45 33 c0 48 3b c1"},  // src\fp\manual.cpp
 {0x141227b04ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 2b 81 b0 01 00 00"},  // src\stereo\r1.cpp
+{0x141239018ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 01 41 14 48 8b cf"},  // src\stereo\lodprobe.cpp
 {0x1412390a8ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 48 89 8b f8 35 00 00"},  // src\stereo\r1.cpp
+{0x1412390d0ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 45 33 c9 45 8b e5"},  // src\stereo\lodprobe.cpp
 {0x14123b760ull, 1, 2, 7, 1, "80 3d ?? ?? ?? ?? 00 75 ?? 45 33 c0 48 8d 05 ?? ?? ?? ??"},  // src\stereo\r1.cpp
+{0x14123bf88ull, 1, 2, 6, 0, "89 15 ?? ?? ?? ?? 65 48 8b 04 25 58 00 00 00 48 8b 08"},  // src\stereo\lodprobe.cpp
+{0x14123c0d0ull, 1, 2, 6, 0, "8b 3d ?? ?? ?? ?? 41 b8 08 60 01 00"},  // src\stereo\lodprobe.cpp
 {0x14123faa8ull, 1, 2, 6, 0, "89 3d ?? ?? ?? ?? 39 3d ?? ?? ?? ??"},  // src\stereo\r1.cpp
+{0x1412962fcull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 48 81 c2 88 00 00 00"},  // src\stereo\lodprobe.cpp
 {0x1412d7300ull, 1, 2, 6, 4080, "8d 0d ?? ?? ?? ?? 49 8b c8 48 03 c9"},  // src\stereo\r1.cpp
 {0x1412d7314ull, 1, 3, 7, 0, "0f c1 0d ?? ?? ?? ?? 8b c9 48 03 c9"},  // src\stereo\r1.cpp
 {0x1412d7318ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 48 8b c7 48 89 ac 24 88 00 00 00"},  // src\stereo\r1.cpp
@@ -121,6 +150,7 @@
 {0x1422989a0ull, 1, 3, 7, 0, "0f c1 0d ?? ?? ?? ?? c3 cc cc cc cc"},  // src\stereo\r1.cpp
 {0x1422989c0ull, 1, 2, 6, 0, "8d 3d ?? ?? ?? ?? 0f 1f 40 00 48 63 05 ?? ?? ?? ??"},  // src\stereo\eyes.cpp
 {0x1422a93c0ull, 1, 2, 6, 0, "39 1d ?? ?? ?? ?? 76 ?? 48 89 7c 24 30"},  // src\stereo\eyes.cpp, src\stereo\r1.cpp
+{0x1422a9870ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 4c 8b fb 48 3b eb"},  // src\stereo\lodprobe.cpp
 {0x1422a98c0ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 4c 8b 08 45 33 ed"},  // src\fp\body.cpp
 {0x1422ade90ull, 1, 2, 6, 0, "89 3d ?? ?? ?? ?? c6 05 ?? ?? ?? ?? 00"},  // src\stereo\r1.cpp
 {0x1422ade98ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? b2 01 48 83 c4 28"},  // src\stereo\r1.cpp
@@ -130,12 +160,16 @@
 {0x1422ae730ull, 1, 2, 6, 0, "11 1d ?? ?? ?? ?? f3 0f 11 5c 24 70"},  // src\stereo\mutate.cpp
 {0x1422ae73cull, 1, 2, 6, 0, "11 1d ?? ?? ?? ?? f3 0f 11 5c 24 50"},  // src\stereo\mutate.cpp
 {0x1422ae74cull, 1, 2, 6, 0, "11 15 ?? ?? ?? ?? f3 0f 11 4c 24 40"},  // src\stereo\mutate.cpp
+{0x1422ae7d8ull, 1, 2, 6, 0, "8b 15 ?? ?? ?? ?? 48 8b f9 49 8b d9"},  // src\stereo\lodprobe.cpp
 {0x1422ae7e0ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 8b 93 98 00 00 00"},  // src\fp\walls.cpp
+{0x1422c6930ull, 1, 2, 7, 0, "c6 05 ?? ?? ?? ?? 00 83 3d ?? ?? ?? ?? 00"},  // src\stereo\mutate.cpp
 {0x1422c6950ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 48 81 c1 10 04 00 00"},  // src\fp\body.cpp
+{0x1422e36e9ull, 1, 2, 7, 0, "80 3d ?? ?? ?? ?? 00 74 ?? 41 8b 01"},  // src\stereo\lodprobe.cpp
 {0x1422e36eaull, 1, 3, 7, 0, "0f b6 05 ?? ?? ?? ?? c0 e0 06 32 c1"},  // src\stereo\mutate.cpp
+{0x1422e36ebull, 1, 2, 6, 0, "38 2d ?? ?? ?? ?? 74 ?? 32 c0 eb ??"},  // src\stereo\lodprobe.cpp
 {0x1422e7950ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? c1 e0 1e 88 4d f4"},  // src\diag\cmd.cpp
 {0x1422e795bull, 1, 3, 7, 0, "0f b6 2d ?? ?? ?? ?? 44 89 54 24 50"},  // src\stereo\mutate.cpp
-{0x1422e7d50ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 33 ff 41 c6 01 01"},  // src\fp\body.cpp
+{0x1422e7d50ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 33 ff 41 c6 01 01"},  // src\diag\crashlog.cpp, src\fp\body.cpp
 {0x1422e9cf9ull, 1, 2, 6, 0, "38 05 ?? ?? ?? ?? 74 ?? b8 02 00 00 00"},  // src\stereo\mutate.cpp
 {0x1422e9d2full, 1, 2, 7, 0, "80 3d ?? ?? ?? ?? 00 0f 29 74 24 40"},  // src\fp\body.cpp
 {0x14242e268ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 8b 40 20 c3 cc cc"},  // src\stereo\mutate.cpp
@@ -149,6 +183,8 @@
 {0x142d1b5d4ull, 1, 2, 6, 0, "8b 35 ?? ?? ?? ?? 41 bd 01 00 00 00"},  // src\stereo\mutate.cpp
 {0x142d24d04ull, 1, 2, 6, 0, "89 1d ?? ?? ?? ?? 48 83 c4 30 5b c3"},  // src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x142d27a8cull, 1, 2, 6, 0, "8b 15 ?? ?? ?? ?? 41 ff c5 49 ff c4"},  // src\diag\crashlog.cpp
+{0x142d2f1d4ull, 1, 2, 6, 0, "8b 05 ?? ?? ?? ?? 0f 28 74 24 60 90"},  // src\stereo\lodprobe.cpp
+{0x142d37907ull, 1, 2, 7, 0, "c6 05 ?? ?? ?? ?? 01 8b 05 ?? ?? ?? ??"},  // src\stereo\lodprobe.cpp
 {0x142d4df18ull, 1, 2, 6, 0, "39 3d ?? ?? ?? ?? 74 ?? 85 f6 75 ??"},  // src\stereo\mutate.cpp
 {0x142d4e298ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 48 8b 89 18 25 00 00"},  // src\diag\crashlog.cpp, src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x142d4e5d8ull, 1, 2, 6, 0, "8b 2d ?? ?? ?? ?? 44 0f b6 54 24 20"},  // src\diag\cbprobe.cpp, src\fp\body.cpp, src\stereo\mutate.cpp
@@ -164,6 +200,7 @@
 {0x144fa8858ull, 1, 2, 6, 0, "89 05 ?? ?? ?? ?? 48 8b 44 24 50 48 8b 00"},  // src\stereo\r1.cpp
 {0x144fadce0ull, 1, 3, 7, 0, "0f 58 05 ?? ?? ?? ?? f3 0f 11 43 18"},  // src\stereo\r1.cpp
 {0x144fc5138ull, 1, 2, 6, 0, "89 1d ?? ?? ?? ?? 8b 1d ?? ?? ?? ??"},  // src\stereo\r1.cpp
+{0x144fc5e00ull, 1, 2, 6, 0, "8d 1d ?? ?? ?? ?? 48 89 b4 24 88 00 00 00"},  // src\stereo\lodprobe.cpp
 {0x144fe80c0ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 48 85 c9 74 ?? 48 89 51 08"},  // src\stereo\r1.cpp
 {0x144fe80c8ull, 1, 2, 6, 0, "89 05 ?? ?? ?? ?? 4c 89 15 ?? ?? ?? ??"},  // src\stereo\r1.cpp
 {0x144fe80d0ull, 1, 2, 6, 0, "8b 0d ?? ?? ?? ?? 41 ff c0 b8 ab aa aa aa"},  // src\stereo\r1.cpp

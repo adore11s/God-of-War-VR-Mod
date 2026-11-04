@@ -19,6 +19,11 @@ struct EyeViews {
     int64_t displayTime = 0;
     int64_t period = 0;  // predicted display period (ns)
     uint64_t serial = 0;
+    // D-310 AFR: the eye NOT rendered this frame (-1 = none). pose / fov / ownFov[afrStale] are its last render's; these
+    // are what this frame would have used for it (xr.cpp turns its old picture to them on non-SteamVR runtimes)
+    int afrStale = -1;
+    Pose afrNowPose{};
+    Fov afrNowFov{}, afrNowOwnFov{};
 };
 
 // PORT-08. The OpenXR runtime (SteamVR) is loaded through the loader-runtime negotiation interface (no loader DLL).
@@ -48,6 +53,12 @@ struct HandState {
     Pose grip{}, aim{};                  // LOCAL space, predicted for the frame's display time
     float stick[2] = {0, 0};
     float trigger = 0, squeeze = 0, trackpadForce = 0;
+    // D-305 (a Valve Index player: "the grips are too sensitive - on the Index the whole handle is the grip"): the Index
+    // reports squeeze/value as the capacitive "hand around the handle" reading (~1 just from holding the controller) and
+    // squeeze/force as the actual squeeze. With squeezeForce set, `squeeze` above is the force and squeezeTouch the
+    // capacitive value (gowvr.ini index_grip_force 0 = the capacitive value as before).
+    float squeezeTouch = 0;
+    bool squeezeForce = false;
     bool a = false, b = false, stickClick = false, triggerTouch = false;
     bool menu = false;  // D-236: the controller's own menu button (Quest Touch left) - Start
     // Finger curl 0 (open) .. 1 (fist) from the runtime's hand skeleton (XR_EXT_hand_tracking driven by the

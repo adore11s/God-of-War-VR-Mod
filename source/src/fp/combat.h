@@ -17,6 +17,7 @@ bool CombatArmsFromAnimation();         // true while ANIMATE: the arm IK stands
 // controllers as a plain gamepad: no arm IK, no gesture attacks, attacks / evades play their animation (no hold, no
 // speed-up, no hit boost); everything else in F1 (view, hit reactions frozen, turning, walls) stays. Any thread.
 bool MotionControls();
+bool OpeningScene();  // D-298: the game's opening (credits) scenes - Kratos' first scenes, the trunk carry, the boat launch
 void CombatCameraOffset(float out[3]);  // world offset added to the F1 eye base (leaps / ANIMATE)
 float CombatBodyLift();                 // metres the held body is raised in the hero pass (leaps)
 void CombatReportRise(float rise);      // hero pass: animated neck height minus the held pose's (metres)
@@ -50,6 +51,7 @@ void CombatHitRadius(float m);          // D-081 "hitradius <m>": Kratos' attack
 void CombatAttackHold(bool on);         // G1 A/B: hold the position during attacks (no lunge), command "attackhold"
 // D-064: the game camera's yaw (its back row; mutate.cpp) = the frame of the game's left stick
 void SetGameCamYaw(float yaw);
+float GameCamYaw();  // D-308: the latest game camera yaw (back-row convention: right (cos, -sin), forward (-sin, -cos))
 // D-064: forward stick push (0..1, 0 = none) the pad merge adds while the player's stick rests: a held attack's recovery
 // goes into locomotion like when walking, instead of the post-attack "delay stance" (and its sound)
 float CombatStickNudge();

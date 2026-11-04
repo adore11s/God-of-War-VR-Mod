@@ -57,7 +57,6 @@ std::atomic<int> g_padMode{0};       // 0 Xbox, 1 PlayStation
 std::atomic<bool> g_psEverOn{false};  // the virtual PlayStation pad was used this session (stays connected, neutral)
 std::atomic<bool> g_psUnavailable{false};  // libScePad imports not all found: Xbox only
 bool PsMode() { return g_padMode.load(std::memory_order_relaxed) == 1; }
-std::atomic<bool> g_hudTouch{false};       // D-262
 std::atomic<int> g_psHandle{-1};  // the game's handle of user 1's PlayStation pad (real, or the mod's virtual one)
 // the PlayStation mode takes the pads from XInput only once the game has opened its PlayStation pad (it reads it then);
 // before / without that (libScePad not initialised) XInput stays the game's pad - never no input at all
@@ -356,19 +355,8 @@ int hk_scePadRead(int h, void* data, int count) {
         n = 1;
     }
     for (int i = 0; i < n; ++i) PsMerge((uint8_t*)data + (size_t)i * kPsSample, g);
-    // D-262: the HUD peek as a finger resting on the touchpad - the sample's touch data (+0x34 count, +0x3c / +0x3e x / y,
-    // +0x40 id; STATIC sub_14057b990 turns a count > 0 into the pad's FingerOnTouchpad, the touchpad 1920 x 943 by
-    // default) - so the game's Touch combat HUD comes up its own way (timer 0x141079150, EVT_TOUCH_STARTED / _ENDED)
-    if (g_hudTouch.load()) {
-        for (int i = 0; i < n; ++i) {
-            uint8_t* s = (uint8_t*)data + (size_t)i * kPsSample;
-            if (s[0x34]) continue;  // a real finger already
-            s[0x34] = 1;
-            *(uint16_t*)(s + 0x3c) = 960;
-            *(uint16_t*)(s + 0x3e) = 471;
-            s[0x40] = 0x7f;
-        }
-    }
+    // (D-262's HUD peek as a finger on the touchpad - +0x34 count, +0x3c / +0x3e x / y, +0x40 id, STATIC sub_14057b990 -
+    // was removed with the head peek, D-311)
     static std::atomic<int> logs{0};
     if (logs.fetch_add(1) < 3) Log("vpad: PlayStation pad read (handle 0x%x, %d sample(s), %s)", (unsigned)h, n, fake ? "virtual" : "real + virtual");
     return n;
@@ -650,8 +638,6 @@ bool PlayerAimInput() {
 }
 bool ExternalLookActive() { return GetTickCount64() - g_extLookAt.load() < 150; }
 bool GameBlockHeld() { return (g_gameButtons.load() & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0; }
-void SetHudTouch(bool on) { g_hudTouch = on; }
-bool HudTouchPossible() { return PsMode() && !g_psUnavailable.load() && g_psHandle.load() >= 0; }
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms) {
     std::lock_guard<std::mutex> lk(g_mu);
     g_hold = {};

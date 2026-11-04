@@ -1,4 +1,5 @@
 #include "combat.h"
+#include "manual.h"
 #include "../core/addr.h"
 #include "body.h"
 #include "firstperson.h"
@@ -714,6 +715,7 @@ bool HitMoveName(const char* a) {
 // stays frozen when getting hit, but with motion controls off the speed-up is off and the attack animations play
 // normally"): refreshed every frame from gowvr.ini motion_controls (the panel writes it)
 std::atomic<bool> g_motionCtl{true};  // (MotionControls() below, outside this namespace)
+std::atomic<ULONGLONG> g_openingAt{0};  // D-298: the last opening-scene animation seen (OpeningScene() below)
 
 Policy ClassifyMotion(const char* anim, bool sync);
 // With motion controls off a HELD attack / evade / post-attack stance plays its animation (ANIMATE, as the runic attacks
@@ -992,6 +994,7 @@ bool CombatInStance() { return g_inStance.load(); }
 static std::atomic<bool> g_heroIdle{false};
 bool CombatHeroIdle() { return g_heroIdle.load(); }
 void SetGameCamYaw(float yaw) { g_camYaw = yaw; }
+float GameCamYaw() { return g_camYaw.load(); }
 float CombatStickNudge() { return g_nudge.load(); }
 // D-200 (owner: the axe "doesn't register hits well" on the Draugr; owner log D-199: 21 of 39 light axe swings turned into
 // the game's axe-STUCK follow-up csaxelightcombo01blendlight / csglobalmeleestickf01 the moment their hit spheres went
@@ -1082,6 +1085,7 @@ void CombatAttackHold(bool on) { g_attackHold = on; Log("combat: attack position
 bool CombatSprinting() { return g_sprinting.load(); }
 bool CombatBusy() { return g_busy.load(); }
 bool MotionControls() { return g_motionCtl.load(); }  // D-244
+bool OpeningScene() { const ULONGLONG at = g_openingAt.load(); return at && GetTickCount64() - at < 2000; }  // D-298
 ULONGLONG CombatIdleMs() {
     const ULONGLONG t = g_idleSince.load();
     if (g_busy.load()) return 0;
@@ -1272,9 +1276,24 @@ static InteractCtx ClassifyContext(const char* prim, const char* anim, bool sync
     }
     return c;
 }
+// D-298: the game's opening (the credits roll over it): Kratos' first scenes, the tree-trunk carry and the boat launch -
+// no health bars on the hand there (xr.cpp). Held 2 s across animation changes (g_openingAt)
+static bool OpeningAnim(const char* a) {
+    if (!a) return false;
+    return _strnicmp(a, "narForOpening", 13) == 0 || _strnicmp(a, "navCarryTreeTrunk", 17) == 0 ||
+           _strnicmp(a, "narForLogBoat", 13) == 0;
+}
 static void ContextTick(bool f1, const char* prim, const char* anim, bool sync) {
+    if (OpeningAnim(prim) || OpeningAnim(anim)) g_openingAt = GetTickCount64();  // D-298
     InteractCtx c;
     if (f1) c = ClassifyContext(prim, anim, sync);
+    // D-307 / D-308: climbing / rowing by hand - both hands on the controllers, the body keeps the game's facing, the grips
+    // are no R1 / L1 (manual.cpp takes them off the pad)
+    if (f1 && (ManualClimbActive() || ManualRowActive())) {
+        c = InteractCtx{};
+        c.bodyLock = c.buttons = c.explicitHands = true;
+        c.why = ManualRowActive() ? "rowing by hand (D-308)" : "climbing by hand (D-307)";
+    }
     // held 300 ms after a context ends: the animation changes between parts of one interaction (enter / idle / exit)
     static ULONGLONG lastOn[2] = {0, 0}, lastLock = 0, lastButtons = 0, lastThrow = 0, lastExplicit = 0;
     const ULONGLONG now = GetTickCount64();
@@ -1356,6 +1375,8 @@ void CombatTick() {
     // D-098 (owner: "carrying the log, my right hand should be motion controlled, the left one not"; owner log: the carry
     // navCarryTreeTrunk* is a sync move -> ANIMATE -> BOTH arms from the animation): a per-hand context rule wins
     if (p == Policy::Animate && g_ctxExplicit.load()) p = Policy::None;
+    // D-307 / D-308: climbing / rowing by hand - the climb's and the boat's sync moves are not ANIMATE (arms from the game)
+    if (p == Policy::Animate && (ManualClimbActive() || ManualRowActive())) p = Policy::None;
     // D-062 trackers (every mode; only F1 uses them)
     {
         static char lastPrim[96] = {};

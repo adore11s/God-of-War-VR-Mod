@@ -6,10 +6,12 @@
 #include "firstperson.h"
 #include "movelog.h"
 #include "combat.h"
+#include "manual.h"
 #include "posdiag.h"
 #include "../vr/xr.h"
 #include "../core/config.h"
 #include "../input/vpad.h"
+#include "../stereo/lodprobe.h"
 #include "../stereo/mutate.h"
 #include "../stereo/r1.h"
 #include "../stereo/sharpui.h"
@@ -1377,9 +1379,11 @@ constexpr HookSite kBoatDockState{"BoatDockState", 0x140803760, 5,
 using PFN_BoatDock = void(__fastcall*)(uint8_t* boat, char state);
 PFN_BoatDock o_BoatDock = nullptr;
 std::atomic<bool> g_inBoat{false};
+std::atomic<int> g_boatState{0};  // D-308: the docking state machine's last state
 
 void __fastcall hk_BoatDock(uint8_t* boat, char state) {
     o_BoatDock(boat, state);
+    g_boatState = (int)state;
     // 1/4 boarding (from dock/beach), 2 seated; 3/5 leaving (to dock/beach), 6 = on the beach after 5, 0 idle.
     bool in = state == 1 || state == 2 || state == 4;
     if (in != g_inBoat.load()) Log("fp: boat %s (state %d)", in ? "entered" : "exited", state);
@@ -2304,15 +2308,33 @@ static bool TalismanFix(uint8_t* skel, const float* root, float* out) {
         // difference. (No recent offset: the old distance test.)
         const Mat4 Lg = Mul(R, AffineInverse(G)), Ld = Mul(R, AffineInverse(D));
         bool move;
+        // D-311b (owner: "during climbing the talisman teleports fast back and forth between my waist and ~6 cm in front of
+        // it - we fixed this with the cave lights, check the decision log"; owner log: talisman passes 343 / 543 / 323
+        // moved vs 488 / 316 / 556 kept per 15 s while climbing - 9 / 391 when walking): climbing / rowing by hand draws
+        // the body in the held standing / seated pose and offset from the game's, while the game's body plays the climb -
+        // the belts differ in place AND turn, and D-229i's per-pass continuity choice flips. While the manual pose is held
+        // every talisman pass is put rigidly on the drawn belt with the offset accepted just before (no swing meanwhile)
+        const bool freeze = ManualClimbActive() || ManualRowActive();
+        Mat4 Lfix{};
         {
-            static Mat4 Lprev{};
+            static Mat4 Lprev{}, Lfrozen{};
             static uint64_t lFrame = 0;
+            static bool frozen = false;
             const uint64_t fr = g_frameNo.load();
             AcquireSRWLockExclusive(&g_talLock);
             if (lFrame && fr - lFrame <= 30) move = d(Lg, Lprev) + 0.01f < d(Ld, Lprev);
             else move = d(R, G) + 0.02f < d(R, D);
-            Lprev = move ? Lg : Ld;
-            lFrame = fr;
+            if (freeze) {
+                if (!frozen) {
+                    frozen = true;
+                    Lfrozen = lFrame ? Lprev : (move ? Lg : Ld);
+                }
+                Lfix = Lfrozen;
+            } else {
+                frozen = false;
+                Lprev = move ? Lg : Ld;
+                lFrame = fr;
+            }
             ReleaseSRWLockExclusive(&g_talLock);
         }
         // D-229h: the belt's own change is the talisman's correction on EVERY pass (D-229 recorded it only on moved ones -
@@ -2324,6 +2346,12 @@ static bool TalismanFix(uint8_t* skel, const float* root, float* out) {
                 "(%.3f %.3f %.3f) %.3f m | belts %.3f m apart | frame %llu", move ? "MOVED" : "kept ", GetCurrentThreadId(),
                 rD.m[3][0], rD.m[3][1], rD.m[3][2], d(R, D), rG.m[3][0], rG.m[3][1], rG.m[3][2], d(R, G), d(G, D),
                 (unsigned long long)g_frameNo.load());
+        }
+        if (freeze) {  // D-311b
+            const Mat4 W = Mul(Lfix, D);
+            memcpy(out, &W, sizeof(W));
+            ++g_lkTal;
+            return true;
         }
         if (!move) { ++g_talKept; return false; }  // already on the drawn belt (or they agree)
         const Mat4 W = Mul(Mul(R, AffineInverse(G)), D);
@@ -2356,6 +2384,9 @@ static bool TalismanFix(uint8_t* skel, const float* root, float* out) {
 // D-162: emitters owned by these objects are Kratos' own sounds (mutate.cpp centres them in F1): the hero, the axe /
 // shield / Blades objects while in his hands or on him
 std::atomic<uint8_t*> g_bladeObjs[4];
+// D-308: the paddle's and the boat's skeletons (FindAttachedObjects, nearest to Kratos' neck)
+std::atomic<uint8_t*> g_paddleSkel{nullptr}, g_boatSkel{nullptr};
+static bool AnySkeletonSeh(uint8_t* sk);
 bool IsKratosSoundOwner(uint8_t* obj) {
     if (!obj) return false;
     uint8_t* hero = g_heroSkel.load();
@@ -2433,6 +2464,9 @@ void FindAttachedObjects() {
     std::vector<LinkedFound> linkedFound;  // D-162
     uint8_t* bladeObjs[4] = {};
     int nBlade = 0;
+    uint8_t *padSk = nullptr, *boatSk = nullptr;  // D-308
+    float padD2 = 1e30f, boatD2 = 1e30f;
+    const char *padName = "", *boatName = "";
     for (int t = 0; t < 64; ++t) {
         uint8_t* tab = G<uint8_t*>(0x1422a98c0 + t * 8);
         if (!tab || IsBadReadPtr(tab, 0x38)) continue;
@@ -2447,6 +2481,21 @@ void FindAttachedObjects() {
                 if (!nm || IsBadReadPtr(nm, 20)) continue;
                 bool known = false;
                 uint8_t* sk = *(uint8_t**)(o + 0x238);
+                // D-308: Kratos' paddle (r_heroa00.wad gopaddle00) and the boat he sits in (nearest to his neck)
+                // (D-308b: not the mooring ropes goboatrope* - owner log: they were taken for the boat)
+                if (haveNeck && (!strncmp(nm, "gopaddle", 8) || (!strncmp(nm, "goboat", 6) && !strstr(nm, "rope"))) &&
+                    AnySkeletonSeh(sk)) {
+                    const int16_t pn = *(int16_t*)(sk + 0x38);
+                    const float* rp = (const float*)(*(uint8_t**)(sk + 0x58) + (size_t)(uint16_t)pn * 0x40 + 0x30);
+                    const float ddx = rp[0] - neckM.m[3][0], ddy = rp[1] - neckM.m[3][1], ddz = rp[2] - neckM.m[3][2];
+                    const float d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                    const bool paddle = nm[2] == 'p';
+                    if (d2 < (paddle ? 9.f : 36.f) && d2 < (paddle ? padD2 : boatD2)) {
+                        (paddle ? padD2 : boatD2) = d2;
+                        (paddle ? padSk : boatSk) = sk;
+                        (paddle ? padName : boatName) = nm;
+                    }
+                }
                 for (int k = 0; k < kAt; ++k)
                     if (!strcmp(nm, g_attached[k].name)) {
                         known = true;
@@ -2511,6 +2560,20 @@ void FindAttachedObjects() {
         g_attached[k].obj = bestObj[k];
     }
     for (int i = 0; i < 4; ++i) g_bladeObjs[i] = i < nBlade ? bladeObjs[i] : nullptr;  // D-162
+    {   // D-308
+        if (padSk != g_paddleSkel.load()) {
+            static int logs = 0;
+            if (padSk && logs++ < 20) Log("manual row: paddle '%s' found (skeleton %p, %d joints, %.2f m from the neck)", padName,
+                                          padSk, (int)*(int16_t*)(padSk + 0x38), sqrtf(padD2));
+        }
+        if (boatSk != g_boatSkel.load()) {
+            static int logs = 0;
+            if (boatSk && logs++ < 20) Log("manual row: boat '%s' found (skeleton %p, %d joints, %.2f m from the neck)", boatName,
+                                           boatSk, (int)*(int16_t*)(boatSk + 0x38), sqrtf(boatD2));
+        }
+        g_paddleSkel = padSk;
+        g_boatSkel = boatSk;
+    }
     {   // D-162: the linked items (learned offsets kept for the ones still there)
         const uint64_t* hh = heroSkel ? *(const uint64_t**)(heroSkel + 0x30) : nullptr;
         LinkedItem next[kLinkedMax];
@@ -2717,26 +2780,47 @@ void PassLocalStats() {
         (unsigned long long)g_localOther.load(), (unsigned long long)g_localSame.load());
 }
 
+// D-307 / D-308: the body held straight while climbing by hand (owner: "make the body straight - the normal position of
+// Kratos") = the standing pose, taken while he stands still on the ground (at most every 250 ms); held seated while
+// rowing by hand = the pose of the first pass after rowing started (the arms do the rowing, the body does not bob)
+std::vector<Mat4> g_standLocal, g_rowLocal;  // (g_calmLock)
+std::atomic<ULONGLONG> g_standAt{0};
 static const uint8_t* FreezeLocal(uint8_t* skel, const uint8_t* local) {
     const int n = (int)(uint16_t)*(int16_t*)(skel + 0x38);
     if (!local || n <= 0) return local;
-    const float w = fmaxf(ThrowFreezeWeight(), CombatHoldWeight());
+    if (ManualRowCaptureReq()) {
+        AcquireSRWLockExclusive(&g_calmLock);
+        g_rowLocal.assign((const Mat4*)local, (const Mat4*)local + n);
+        ReleaseSRWLockExclusive(&g_calmLock);
+        Log("manual row: the seated pose taken (%d joints)", n);
+    }
+    const float wc = fmaxf(ThrowFreezeWeight(), CombatHoldWeight()), wm = ManualPoseWeight();
+    const float w = fmaxf(wc, wm);
     if (w <= 0.f) {
         AcquireSRWLockExclusive(&g_calmLock);
         g_calmLocal.resize((size_t)n);
         memcpy(g_calmLocal.data(), local, (size_t)n * sizeof(Mat4));
+        const ULONGLONG t = GetTickCount64();
+        if (ManualStandingCalm() && t - g_standAt.load() >= 250) {
+            g_standAt = t;
+            g_standLocal.assign((const Mat4*)local, (const Mat4*)local + n);
+        }
         ReleaseSRWLockExclusive(&g_calmLock);
         return local;
     }
     thread_local std::vector<Mat4> out;
     out.resize((size_t)n);
     AcquireSRWLockShared(&g_calmLock);
-    const bool ok = (int)g_calmLocal.size() == n;
+    const bool manualSrc = wm > wc;
+    const std::vector<Mat4>* src = &g_calmLocal;
+    if (manualSrc && ManualPoseKind() == 1 && (int)g_standLocal.size() == n) src = &g_standLocal;
+    if (manualSrc && ManualPoseKind() == 2 && (int)g_rowLocal.size() == n) src = &g_rowLocal;
+    const bool ok = (int)src->size() == n;
     if (ok) {
         const Mat4* cur = (const Mat4*)local;
         for (int j = 0; j < n; ++j) {
             const Mat4& a = cur[j];
-            const Mat4& b = g_calmLocal[j];
+            const Mat4& b = (*src)[j];
             Mat4& o = out[j];
             if (w >= 1.f) { o = b; continue; }
             for (int r = 0; r < 4; ++r)
@@ -2765,7 +2849,7 @@ static const uint8_t* FreezeLocal(uint8_t* skel, const uint8_t* local) {
     static uint8_t* neckSkel = nullptr;
     (void)neck;
     if (ok && skel != neckSkel) { neckSkel = skel; neckIdx = FindJointByHash(0xf14d9a553fdad7ccull); }
-    if (ok && neckIdx >= 0 && neckIdx < n)
+    if (ok && !manualSrc && neckIdx >= 0 && neckIdx < n)  // (leaps: combat holds only)
         CombatReportRise(ChainHeight((const Mat4*)local, neckIdx) - ChainHeight(g_calmLocal.data(), neckIdx));
     ReleaseSRWLockShared(&g_calmLock);
     if (!ok) return local;
@@ -2948,6 +3032,69 @@ static void HudSighting(uint64_t h0, uint8_t* skel, int nj, const float* root) {
                    : h0 == kHudRageBar ? "Spartan Rage bar" : "runic (special) meters";
     Log("hud: %s skeleton %p (%d joints) at UI (%.2f %.2f %.2f)", nm, skel, nj, root[12], root[13], root[14]);
 }
+// D-298 (owner: "in the beginning, where the credits roll, the health UI does the cropping - it puts the credits onto the
+// hand"): D-284 moves the HUD's two bottom corner blocks onto the left hand in gameplay F1, whatever is in them - the
+// opening credits are written there. The hand now gets them only while Kratos' own bars are drawn: the health / Rage
+// bar UI objects (D-147 hashes) placed through this pass within the last hud_bars_seen_ms (400) with a visible root
+// (scale > 0.01). Their visibility changes are logged (evidence for the credits section)
+std::atomic<ULONGLONG> g_hudBarSeenAt{0};
+static void HudBarNote(const float* root) {
+    const float sc = sqrtf(root[0] * root[0] + root[1] * root[1] + root[2] * root[2]);
+    if (sc > 0.01f) g_hudBarSeenAt = GetTickCount64();
+}
+// D-311 (owner: "you didn't fix that the credits show up on Kratos' hands in first person - text like 'Produced by Yumi
+// Yang', one line that appears - decompile the game and find it"): STATIC (for101_rivertohouse.wad, the opening level):
+// the opening credits are two UI text objects of that level - goProtoLeftText / goProtoRightText (models MDL_lefttext /
+// MDL_righttext, script SCR_TextObject, styles LeftOpeningCreditsStyle / RightOpeningCreditsStyle, Maya nodes
+// for101_ui.mb|LeftText / |RightText = their root joints, the D-147 naming), paged by the level script ("Showing
+// credits page %d", creditIndex, EZ_Credits_* trigger zones; r_lang_en.wad text ids 44012 - 44019: "Music By",
+// "Executive Producer", "Produced by", "Directed by", "Bear McCreary", "Shannon Studstill", "Yumi Yang", "Cory Barlog").
+// They are drawn while Kratos walks / rows - his health bars are drawn too, so D-298's "only with the bars and not in
+// the opening animations" let the corner blocks (and the line written in them) go onto the hand. Root joint hashes
+// (JointHash, checked: health_bar 0x34cc475d7694c8ab): LeftText 0x004b4d68e205e24f, RightText 0x1615412a193e6bc9.
+// While either is placed through this pass with a visible root (scale > 0.01) in the last hud_credits_seen_ms (600),
+// the whole HUD stays at the head (xr.cpp)
+constexpr uint64_t kUiCreditsLeft = 0x004b4d68e205e24full, kUiCreditsRight = 0x1615412a193e6bc9ull;
+std::atomic<ULONGLONG> g_creditsSeenAt{0};
+static void CreditsNote(uint64_t h, uint8_t* skel, int nj, const float* root) {
+    const float sc = sqrtf(root[0] * root[0] + root[1] * root[1] + root[2] * root[2]);
+    if (sc > 0.01f) g_creditsSeenAt = GetTickCount64();
+    static std::atomic<int> logs{0};
+    static uint8_t* seen[8] = {};
+    for (uint8_t* s : seen) if (s == skel) return;
+    const int k = logs.fetch_add(1);
+    if (k >= 8) return;
+    seen[k] = skel;
+    Log("hud: opening credits text %s skeleton %p (%d joints, scale %.2f) at UI (%.2f %.2f) (D-311)",
+        h == kUiCreditsLeft ? "LeftText" : "RightText", skel, nj, sc, root[12], root[13]);
+}
+bool OpeningCreditsShown() {
+    static const ULONGLONG within = (ULONGLONG)fmaxf(config::GetFloat("hud_credits_seen_ms", 600.f), 50.f);
+    const ULONGLONG at = g_creditsSeenAt.load(), now = GetTickCount64();
+    const bool shown = at && now - at <= within;
+    static bool was = false;
+    static int logs = 0;
+    if (shown != was && logs < 60) {
+        ++logs;
+        Log("hud: opening credits text %s (D-311)", shown ? "drawn - the whole HUD stays at the head" : "gone");
+    }
+    was = shown;
+    return shown;
+}
+bool HudBarsShown() {
+    static const ULONGLONG within = (ULONGLONG)fmaxf(config::GetFloat("hud_bars_seen_ms", 400.f), 50.f);
+    const ULONGLONG at = g_hudBarSeenAt.load(), now = GetTickCount64();
+    const bool shown = at && now - at <= within;
+    static bool was = true;
+    static int logs = 0;
+    if (shown != was && logs < 60) {
+        ++logs;
+        Log("hud: Kratos' health / Rage bars %s (D-298)", shown ? "drawn again" : "not drawn - the HUD stays at the head");
+    }
+    was = shown;
+    return shown;
+}
+
 static bool MeterReproject(uint8_t* skel, const float* root, float* out) {
     // D-149: off by default - owner log: every enemy bar skeleton's root sits at the UI origin (0 0 0), so the bar's spot
     // is applied outside its root and this never had anything to place ("still undecided" both ways)
@@ -4780,6 +4927,7 @@ void __fastcall hk_PaletteBuild(uint8_t* inst, void* a2, void* a3, void* a4) {
     PaletteHeadHide(inst);
     o_PaletteBuild(inst, a2, a3, a4);
     stereo::R1SkinPrevious(inst, a2, a3, a4);  // dlss-vr: eye 1's previous pose = eye 0's
+    stereo::CharacterTextures(a2);             // D-303: characters' textures at full size in VR
 }
 
 // D-069b "handjoints N" (owner: the loose chain from the fist to the Blade lags while moving): every joint of every
@@ -6186,7 +6334,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         float hx = 0.f, hz = 0.f, hy = NAN;
         const bool heldRoot = CombatHeldRoot(&hx, &hz, &hy);
         float ldx = heldRoot ? hx - root[12] : 0.f, ldz = heldRoot ? hz - root[14] : 0.f;
-        const float ldy = heldRoot && !isnan(hy) ? hy - root[13] : 0.f;  // the attack's vertical root motion too
+        float ldy = heldRoot && !isnan(hy) ? hy - root[13] : 0.f;  // the attack's vertical root motion too
         // D-088 (owner: "when attacks end and I walk forward the axe and Blades are not in my hands for a few ms"): at a
         // hold's release the VIEW eases from the held spot onto the game's position (CombatReleaseOffset, < 0.6 m) but the
         // drawn body snapped there at once - the hand targets (relative to the view) were up to 0.6 m off the shoulders,
@@ -6203,6 +6351,17 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
                 const float sgy = sinf(gy), cgy = cosf(gy);
                 ldx += cgy * sR + sgy * sB;
                 ldz += -sgy * sR + cgy * sB;
+                eyeShift = true;
+            }
+        }
+        // D-307b: climbing by hand - the drawn body moved toward the head (manual.cpp; the view is built from the game's
+        // root, so this never feeds back into it)
+        if (FpMode() == 1) {
+            float mo[3];
+            if (ManualBodyOffset(mo) && (mo[0] != 0.f || mo[1] != 0.f || mo[2] != 0.f)) {
+                ldx += mo[0];
+                ldy += mo[1];
+                ldz += mo[2];
                 eyeShift = true;
             }
         }
@@ -6284,6 +6443,13 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
             ++g_passes;
             return;
         }
+        // D-308: rowing by hand - the paddle between the drawn hands
+        if (root && skel && skel == g_paddleSkel.load() && ManualPaddlePlace(skel, root, r)) {
+            o_LocalToWorld(skel, local, r, flag);
+            t_passLocal = local;
+            ++g_passes;
+            return;
+        }
         // D-110 (code audit M2): outside gameplay first person, with Kratos' body not turned, the mod places no other
         // object (glue, axe effects, Blades, carried items, lunge ghosts are all F1 rules): every skinned object in the
         // world went through the checks below (locks, pointer probes) on the animation job threads, VR off included.
@@ -6298,13 +6464,17 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         bool uiMeter = false;  // D-147
         if (root && skel) {
             const int njm = (int)(uint16_t)*(int16_t*)(skel + 0x38);
-            const uint64_t* hm = njm >= 4 && njm <= 64 ? *(const uint64_t**)(skel + 0x30) : nullptr;
+            // D-311: from 1 joint (the credits text objects may be small skeletons)
+            const uint64_t* hm = njm >= 1 && njm <= 64 ? *(const uint64_t**)(skel + 0x30) : nullptr;
             if (hm && !IsBadReadPtr(hm, 8)) {
                 const uint64_t h = hm[0];
-                if (h == kHudEnemyMeter || h == kHudEnemyMeterPasted || h == kHudBossMeter || h == kHudHealthBar ||
-                    h == kHudRageBar || h == kHudSpecialMeters) {
+                if (h == kUiCreditsLeft || h == kUiCreditsRight) CreditsNote(h, skel, njm, root);  // D-311
+                if (njm >= 4 && (h == kHudEnemyMeter || h == kHudEnemyMeterPasted || h == kHudBossMeter || h == kHudHealthBar ||
+                    h == kHudRageBar || h == kHudSpecialMeters)) {
                     HudSighting(h, skel, njm, root);
                     uiMeter = true;
+                    if (h == kHudHealthBar || h == kHudRageBar) HudBarNote(root);  // D-298
+
                     // (a rebuild pass fed with the skeleton's own cached root already holds our placement)
                     const uint8_t* mm = *(const uint8_t**)(skel + 0x58);
                     const bool selfFed = (const uint8_t*)root >= mm && (const uint8_t*)root < mm + (size_t)njm * 0x80;
@@ -6966,6 +7136,20 @@ int CurrentWeapon() {
 }
 
 bool InBoat() { return g_inBoat.load(); }
+int BoatState() { return g_boatState.load(); }
+uint8_t* PaddleSkeleton() { return g_paddleSkel.load(); }
+static bool SkelRootYSeh(uint8_t* sk, float* y) {
+    __try {
+        const int n = (int)(uint16_t)*(const int16_t*)(sk + 0x38);
+        const float* w = (const float*)(*(const uint8_t* const*)(sk + 0x58) + (size_t)n * 0x40);
+        *y = w[13];
+        return n > 0 && *y == *y;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool BoatRootY(float* y) {
+    uint8_t* sk = g_boatSkel.load();
+    return sk && SkelRootYSeh(sk, y);
+}
 uint64_t HeroWorldPassCount() { return g_heroWorldPasses.load(); }  // D-083 loadwatch
 // Draw-time shrink (F7 arms only, neck): applied just before the frame's render kicks and put back right after them.
 // Shrunk in the pass hook instead, other game code rebuilt the arms from the shrunk chest in between (LIVE: F7 arms

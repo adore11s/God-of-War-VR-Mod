@@ -6,6 +6,7 @@
 // 423 -> 752 -> 801 (joint names by hash below). Hand frame: fingers along +Y, thumb on -Z, palm toward +X (right) /
 // -X (left). OpenXR grip frame: +X right, +Y up, fingers along -Z  =>  wrist rows = (-gripX, -gripZ, -gripY).
 #include "arms.h"
+#include "manual.h"
 #include "body.h"
 #include "combat.h"
 #include "../core/log.h"
@@ -104,6 +105,7 @@ struct ArmPlan {
     int fingerCount = 0;
     float curl[3] = {0, 0, 0};  // grip, trigger, thumb (0 open .. 1 fist)
     bool authoredFingers = false;  // D-049: fingers keep the animation's grip (Blades)
+    float hook = 0.f;              // D-307: 0..1 fingers hooked over a ledge (manual climbing)
     // Shoulders: the clavicle is held at a fixed pose relative to the chest (no
     // animation shrug/bob under the player's arms) and slides toward a target beyond the arm's reach, so the hand
     // reaches the controller now that the body no longer leans.
@@ -514,6 +516,13 @@ void SolveArm(uint8_t* skel, const ArmPlan& a) {
             float len = Len(Row(L(j), 3));  // bone length from the local (D-038)
             if (JointParent(j) != fi.joint[k - 1]) len = Len(Row(*o, 3) - Row(*prevOld, 3));
             float phi = (4.f + (fi.maxDeg[k - 1] - 4.f) * a.curl[fi.input]) * 0.0174533f;  // slight relaxed bend
+            if (a.hook > 0.f) {
+                // D-307 (owner: "a custom finger posture for gripping the wall" on the sideways climbs): hooked over the
+                // ledge - knuckles nearly straight, the middle and end joints bent; the thumb lies along the hand
+                static const float kHookFinger[3] = {20.f, 100.f, 70.f}, kHookThumb[2] = {10.f, 20.f};
+                const float hd = (fi.count == 2 ? kHookThumb[(k - 1) & 1] : kHookFinger[(k - 1) % 3]) * 0.0174533f;
+                phi += (hd - phi) * a.hook;
+            }
             float s = sinf(phi), c = cosf(phi);
             V3 Y = Row(prev, 1), Z = Row(prev, 2);
             Mat4 m = prev;
@@ -1799,6 +1808,10 @@ void ArmsUpdate(bool active, const Mat4* handWorld /*[2] or null*/, const bool* 
             if (h == 1 && AxeInHand()) a.curl[0] = a.curl[1] = a.curl[2] = 1.f;  // closed fist (owner preferred)
             // D-044: both fists closed around the Blades while the game is in Blades mode (owner: open hands on them)
             if (CurrentWeapon() == 2) a.curl[0] = a.curl[1] = a.curl[2] = 1.f;
+            // D-307 / D-308: a fist round the rope / a wall hold / the paddle, fingers hooked over a ledge
+            if (const float mf = ManualFist(h); mf > 0.f)
+                for (float& c : a.curl) c = fmaxf(c, mf);
+            a.hook = ManualHook(h);
             a.authoredFingers = CurrentWeapon() == 2 && g_bladesAuthoredFingers.load();
             if (g_curlTest >= 0.f) a.curl[0] = a.curl[1] = a.curl[2] = g_curlTest;
             {   // D-038: fingers move at most ~12 curl units per second (a fist in ~80 ms): no single-frame snaps
@@ -1815,19 +1828,20 @@ void ArmsUpdate(bool active, const Mat4* handWorld /*[2] or null*/, const bool* 
             }
             // controller grip, pitched / turned / rolled per headset family, -> hand frame, pulled back to the wrist
             Mat4 g = handWorld[h];
-            if (g_pitchDeg != 0.f) {
+            const bool exact = ManualHandExact(h);  // D-308d: the mod's own grip (the paddle) - no per-headset angle
+            if (g_pitchDeg != 0.f && !exact) {
                 float pr = -g_pitchDeg * 0.0174533f, c = cosf(pr), s = sinf(pr);  // direction fixed (owner: was worse)
                 V3 Y = Row(g, 1), Z = Row(g, 2);
                 SetRow(g, 1, Y * c + Z * s);
                 SetRow(g, 2, Z * c - Y * s);
             }
-            if (g_yawDeg != 0.f) {  // about the grip's up axis; mirrored on the left hand
+            if (g_yawDeg != 0.f && !exact) {  // about the grip's up axis; mirrored on the left hand
                 float r = g_yawDeg * a.side * 0.0174533f, c = cosf(r), s = sinf(r);
                 V3 X = Row(g, 0), Z = Row(g, 2);
                 SetRow(g, 0, X * c - Z * s);
                 SetRow(g, 2, Z * c + X * s);
             }
-            if (g_rollDeg != 0.f) {  // about the grip's pointing axis; mirrored on the left hand
+            if (g_rollDeg != 0.f && !exact) {  // about the grip's pointing axis; mirrored on the left hand
                 float r = g_rollDeg * a.side * 0.0174533f, c = cosf(r), s = sinf(r);
                 V3 X = Row(g, 0), Y = Row(g, 1);
                 SetRow(g, 0, X * c + Y * s);

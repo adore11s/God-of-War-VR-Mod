@@ -25,9 +25,12 @@ int EyesRenderEye();
 // switches the capture to it (live); EyesAfrKick (game thread, before the frame's single kick) names the eye and its
 // views - they travel with the frame's submission, the render thread captures that eye at Present and pairs it with the
 // other eye's last image and the pose it was rendered at.
-void EyesAfr(bool on);
+// D-294 mono (gowvr.ini mono_rendering): the same single kick, always eye 0's slot, rendered from the head's centre; its
+// picture goes to both eyes with the views it was rendered with (both at the centre)
+void EyesAfr(bool on, bool mono = false);
 void EyesAfrKick(int eye);
-bool EyesAfrOn();
+bool EyesAfrOn();   // AFR or mono: one kick per frame
+bool EyesMonoOn();  // D-294
 // Save both captured eye images to gowvr_logs/shots/<name>_eye0.png / _eye1.png (1/div scale). Command thread.
 void EyesShot(const char* name, int div);
 

@@ -1310,13 +1310,27 @@ void SharpUiHudDiscard() {
 
 bool SharpUiHudLayer(int eye, ID3D11ShaderResourceView** srv, uint32_t* w, uint32_t* h, float* sx, float* sy) {
     eye &= 1;
+    // D-294 mono: only eye 0 renders - eye 1's HUD layer is the picture eye 0's call took this frame (the same frustum;
+    // xr.cpp asks for eye 0 first)
+    static bool monoTaken = false;  // (render thread)
+    if (EyesMonoOn() && eye == 1) {
+        if (!monoTaken || !g_hudEyeSrv[0]) return false;
+        *srv = g_hudEyeSrv[0];
+        *w = g_hudEyeW;
+        *h = g_hudEyeH;
+        *sx = g_hudSx[0];
+        *sy = g_hudSy[0];
+        return true;
+    }
     // D-243 (owner: "in AFR the HUD following the head flickers - subtitles, button prompts"): each eye's HUD picture is
     // copied when that eye renders - in AFR every other frame - and was taken once, so the eye not rendered this frame had
     // no HUD layer: on / off every frame. In AFR an eye keeps its last HUD picture until its next one (at most 120 ms)
     const bool fresh = g_hudReady[eye].exchange(false);
     const ULONGLONG at = g_hudCopiedAt[eye].load();
     const bool held = !fresh && EyesAfrOn() && at && GetTickCount64() - at < 120;
+    if (eye == 0) monoTaken = false;
     if ((!fresh && !held) || !g_hudEyeSrv[eye]) return false;
+    if (eye == 0) monoTaken = true;
     *srv = g_hudEyeSrv[eye];
     *w = g_hudEyeW;
     *h = g_hudEyeH;

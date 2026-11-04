@@ -81,6 +81,8 @@ void OnAttach(bool staticLoad) {
     gowvr::DetourEarlyInstall(staticLoad);  // (a dynamic load - some injector - keeps the thread suspension)
     gowvr::diag::InstallCrashGuards();  // D-105
     gowvr::stereo::InstallLodHook();    // D-108
+    gowvr::stereo::InstallStreamLists(staticLoad);  // D-296 (code patched: only before any game thread)
+    gowvr::stereo::InstallTextureHeap();            // D-297 (the game's memory setup runs later)
     gowvr::DetourEarlyInstall(false);
     gowvr::d3d::Install();
     gowvr::frame::InstallRenderSize();  // square VR picture, small desktop window

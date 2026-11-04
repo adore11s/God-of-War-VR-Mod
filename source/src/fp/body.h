@@ -14,6 +14,9 @@ bool InCinematic();
 bool SceneAnimating();
 // Player is in the boat (boarding/leaving transitions of the boat's docking state machine).
 bool InBoat();
+int BoatState();               // D-308: the boat's docking state machine's last state (1/4 boarding, 2 seated, 3/5 leaving)
+uint8_t* PaddleSkeleton();     // D-308: Kratos' paddle (gopaddle00) nearest to him, or null
+bool BoatRootY(float* y);      // D-308: the height of the boat's root (the boat nearest to Kratos)
 uint64_t HeroWorldPassCount();
 // Render thread side of the hide lists: shrink right before the frame's render kicks, restore right after them.
 void BodyHideDrawBegin();
@@ -22,6 +25,10 @@ void BodyHideEnsure();  // D-082: re-shrink the neck before a kick if a pass put
 bool HideBody();  // always false: the F7 "arms only" mode was removed (owner 2026-10-19)
 // The Leviathan axe is attached to the (IK) right hand right now (read by the arms: closed fist).
 bool AxeInHand();
+// D-298: Kratos' health / Rage bar UI objects were drawn in the last hud_bars_seen_ms (gameplay F1 passes only)
+bool HudBarsShown();
+// D-311: the opening credits text objects (LeftText / RightText, for101) were drawn in the last hud_credits_seen_ms
+bool OpeningCreditsShown();
 // D-153: the drawn (VR) axe as a segment grip -> head, this frame and the previous one (world); false when not recent
 bool AxeHitSegment(float cur[2][3], float prev[2][3]);
 int BladeHitSegments(float cur[2][2][3], float prev[2][2][3]);  // D-185: the drawn Blades (root -> tip), count 0..2

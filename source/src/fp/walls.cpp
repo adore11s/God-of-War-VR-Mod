@@ -360,6 +360,15 @@ bool WallsStep(const float from[3], const float to[3], float out[3]) {
 
 bool WallsAttackActive() { return Enabled() && config::GetFloat("attack_walk_walls", 1.f) > 0.5f; }
 
+// D-307: the ground under a climbing Kratos (manual.cpp) - the same cast, also with the F1 walls switched off
+bool WallsRay(const float a[3], const float b[3], float hit[3]) {
+    if (g_dead.load()) return false;
+    Hit h;
+    if (!Cast(a, b, &h)) return false;
+    hit[0] = h.p[0]; hit[1] = h.p[1]; hit[2] = h.p[2];
+    return true;
+}
+
 // D-230: a straight move of Kratos (feet height from[1]) clear of walls - the end of a held attack snaps the game onto
 // the held spot only through a clear path
 bool WallsClearPath(const float from[3], const float to[3]) {

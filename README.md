@@ -11,7 +11,7 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **First person on / off:** hold your right hand next to your head and press **○ (PS VR2) / B (Meta Quest, Index)**. Press it while walking to switch first person for gameplay, or during a cutscene to switch it for cutscenes. By default it is on for gameplay and off for cutscenes. You can also change both in the VR settings panel.
 - **Tested:** only the first 2 hours of the game. Later parts may break or crash.
 - **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too. In menus the sticks also work as the arrow buttons (D-pad).
-- **Health and Spartan Rage bars in first person:** above your **left hand**. Pick Head in the VR settings panel to see them by holding your left hand next to your head instead.
+- **Health and Spartan Rage bars in first person:** above your **left hand** (while the game shows them - not during the opening credits).
 - **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
 - **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
 - **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
@@ -36,6 +36,11 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 - **Smooth or snap turning** in first person, set in the VR settings panel.
 - **Finishers in first or third person**, set in the VR settings panel.
 - **Motion controls on or off** in first person (VR settings panel). Off: the controllers work like a gamepad and attacks play their normal animations.
+- **Axe weight** in first person (VR settings panel): the axe trails your hand and swings on a little, like a heavy weapon.
+- **Manual climbing** in first person (VR settings panel): grip walls, ledges, ropes and chains and pull yourself along with your own hands.
+- **Manual rowing** in first person (VR settings panel): row the boat with the paddle in both hands - close strokes go forward, wide sweeps turn.
+- **Compass in first person: Always or Head** (VR settings panel). Head: the compass shows only while you hold your left hand at the left side of your head.
+- **Rendering method:** Native (both eyes), AFR (one eye per frame) or Mono (one picture for both eyes, the fastest), set in the VR settings panel.
 - **Head-based aiming with any controller:** aim (VR left trigger, gamepad L2 or Left Ctrl on the keyboard) and the throw goes where you look.
 - **A square VR picture** that matches your headset's resolution automatically (or a size you choose), whatever your monitor's resolution.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
@@ -81,7 +86,7 @@ None of these files contain your user name or other personal information.
 ## Known bugs (fixes coming soon)
 
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
-- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Try AFR rendering (VR settings panel: Rendering Method).
+- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Try AFR or Mono rendering (VR settings panel: Rendering method).
 
 ## Open source
 
