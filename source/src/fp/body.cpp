@@ -348,6 +348,15 @@ void BodyFollowYaw(float viewYaw, bool active, bool aiming) {
     last = now;
     static bool have = false;
     static float yaw = 0.f;
+    {   // D-316 (diagnostic): the game's facing not measured (no hero world pass seen) = the body follow is off meanwhile
+        static bool prevValid = true;
+        static int logs = 0;
+        const bool v = g_gameRootYawValid.load();
+        if (v != prevValid && active && logs++ < 40)
+            Log("facing: the game's facing %s - the drawn body follow %s (D-316)", v ? "measured again" : "NOT measured (no hero pass)",
+                v ? "resumes" : "is off");
+        prevValid = v;
+    }
     if (!g_gameRootYawValid.load()) { g_bodyOverride = false; have = false; return; }
     const float game = g_gameRootYaw.load();
     if (!active && !g_bodyOverride.load()) { have = false; return; }
@@ -2188,8 +2197,14 @@ static void LinkPerPass(LinkState& st, const Mat4& R, const Mat4& P) {
     st.good = st.good < 1000000 ? st.good + 1 : st.good;
     ++g_lkLearn;
 }
+// D-322 (below, "a held crystal in the drawn hand"): the crystal is the hand's, never an item on his body (D-162)
+constexpr char kHeldThrowName[] = "gothrowablevibrate";
+constexpr char kCarryCrystalName[] = "gocarrybifrostlighttop";  // D-324b: the carried Bifrost light crystal (left hand)
+std::atomic<uint8_t*> g_thrObj{nullptr}, g_thrSkel{nullptr};
+static bool HeldThrowOn();
 // a pass of an object linked to a Kratos joint (gameplay F1)
 static bool LinkedFix(uint8_t* skel, const float* root, float* out) {
+    if (skel && skel == g_thrSkel.load(std::memory_order_relaxed) && HeldThrowOn()) return false;  // D-322
     int slot = -1;
     for (int i = 0; i < kLinkedMax; ++i)
         if (g_linkedSkel[i].load(std::memory_order_relaxed) == skel) { slot = i; break; }
@@ -2509,6 +2524,9 @@ void FindAttachedObjects() {
                     }
                 // D-162: hung on a Kratos joint by the game's own link -> placed on the drawn joint (no carry candidate)
                 if (!known && heroSkel && sk != heroSkel && PlausibleSkeleton(sk) && LinkedToHero(o, sk, heroSkel)) {
+                    // D-322: a held crystal hangs on a hand's weapon point - placed by the hand rule (HeldThrow*), not on
+                    // the animated (published) joint like an item on his body
+                    if (HeldThrowOn() && (!strcmp(nm, kHeldThrowName) || !strcmp(nm, kCarryCrystalName))) continue;
                     if (linkedFound.size() < (size_t)kLinkedMax) linkedFound.push_back({sk, o, *(const int16_t*)(o + 0x14c), nm});
                     continue;
                 }
@@ -4458,6 +4476,428 @@ static float MatDist(const Mat4& a, const Mat4& b) {
     const float x = a.m[3][0] - b.m[3][0], y = a.m[3][1] - b.m[3][1], z = a.m[3][2] - b.m[3][2];
     return sqrtf(x * x + y * y + z * z);
 }
+
+// ---- D-322: a held crystal (the dragon fight's throwables) in the drawn hand -----------------------------------------
+// Owner (2026-11-14 / 11-15): "when I'm holding a crystal in my hand it keeps fighting over two copies - one holding still
+// and one in my hand"; D-321 (picked by distance to the right wrist) was reverted - it took the right Blade too. Owner:
+// "read how rowing, the axe and the Blades are done", "the talisman / cave light fix could help".
+// STATIC (decompile) and the mod's own code:
+// - the crystal is the game object 'gothrowablevibrate' (22 joints), hung by the game (type-2 link) on Kratos joint 227:
+//   a hand WEAPON POINT (hash b41408d8ad411e00 - the right Blade's point, D-044; a child of joint 4), not a body joint;
+// - every write of its root is  its local x sub_14058c560(its own link = object +0xa0)  (sub_14054de50 -> sub_140553eb0,
+//   EnsureWorld's world pass and its direct root write alike). The link answers from Kratos' world cache when current -
+//   the drawn pose: in Blades mode ArmsApply keeps 227 on the controller hand - else from the game's evaluation of his
+//   locals (the game body), and keeps that answer for the whole generation (link +0x50 / +0x98);
+// - D-162 took it for an item on his body: LinkedFix put every world pass on the PUBLISHED 227 - and Publish() runs
+//   BEFORE the arm IK (the camera's pose): the game's ANIMATED hand, which holds still while the controller hand moves;
+// - in ~44 % of the hero's passes the game's locals put the weapon points ~0.7 m from the hand (D-050 / D-051).
+// Two or three places per frame - the D-229 cave light's class: one reader, two sources. Now, in gameplay F1, for exactly
+// the object named 'gothrowablevibrate' while the game links it to a Kratos joint (nothing else - never a Kratos joint,
+// the Blades' objects, the axe or the shield; on the stand or thrown it is the game's):
+// - its Kratos joint is measured against the right wrist in the hero's own passes (joint x wrist^-1, both from that
+//   pass's locals); a pass with the joint > 0.3 m from the wrist - the alternating one - never counts. While the arm plays
+//   the game's animation (the grab, the throw) that grip follows the game's value; once the arm is on the controller it
+//   is FIXED - kept once, like the axe's grip and the paddle (D-308);
+// - grip x the DRAWN right wrist (after the arm IK, the same hero pass) is the answer to the crystal's own link reads -
+//   every write of its root (passes, direct writes) uses that one place (the D-229 reader fix, for this reader);
+// - every world pass of it is placed  its local x that joint  (the local measured from the pass's own parent, this
+//   thread's last link answer); after every pass a root elsewhere (passes fed world-space locals) is moved there; right
+//   before its skinning palette is built (the D-170 final point) too. gowvr.ini held_throwable_fix 0 = off (as before).
+struct HeldThrowState {
+    uint8_t* obj = nullptr;
+    uint8_t* skel = nullptr;
+    int joint = -1;
+    int hand = 1;        // D-324: 1 right (the dragon fight's throwable), 0 left (a carried crystal)
+    int kind = 0;        // 0 'gothrowablevibrate' by name, 1 the object the game links to the left hand while carrying
+    Mat4 G{};            // the Kratos joint in the hand's wrist frame (the game's grip)
+    bool haveG = false, frozen = false;
+    uint32_t goodN = 0;  // the game's in-hand samples since the grip last followed the game
+    Mat4 P{};            // the Kratos joint as drawn: G x the drawn right wrist
+    bool haveP = false;
+    uint64_t pFrame = 0;
+    Mat4 C{};            // the crystal's root in that joint's frame (its local)
+    bool haveC = false;
+    int cBad = 0;
+    Mat4 cand{};         // D-324b: kind 1 - the grip the last passes agree on (continuity)
+    int candN = 0;
+};
+SRWLOCK g_thrLock = SRWLOCK_INIT;
+HeldThrowState g_thr;                       // under g_thrLock
+std::atomic<int> g_thrJoint{-1}, g_thrHand{1}, g_thrKind{0};
+std::atomic<uint64_t> g_thrSeen{0};
+// D-324b (owner: "the blue crystal I carry does the same thing as the red one - fix it the same way"; owner log 12:25: the
+// carried Bifrost light crystal is 'gocarrybifrostlighttop', hung on Kratos joint 204 0.32 m from the animated left
+// wrist - D-324's "< 0.3 m in the left hand" test rejected it): exactly that name is the left hand's (kind 1), with the
+// left arm the animation's while carrying (combat.cpp). Its joint sits farther from the wrist than the weapon points'
+// 0.3 m, so its in-hand passes are told by continuity (the D-229i lesson): the grip locks on 3 passes in a row that agree
+// within 5 cm (each < 0.5 m from the wrist), then only passes within 8 cm of it count; 10 in a row agreeing elsewhere move it.
+std::atomic<uint32_t> g_thrLinkOurs{0}, g_thrLinkGame{0}, g_thrPlaced{0}, g_thrKept{0}, g_thrPost{0}, g_thrPal{0},
+    g_thrPalMoved{0}, g_thrGood{0}, g_thrOff{0}, g_thrCReject{0};
+thread_local uint8_t* t_thrAnsObj = nullptr;  // this thread's last answer to the crystal's own link (its pass's parent)
+thread_local Mat4 t_thrAns{};
+thread_local int64_t t_thrAnsQpc = 0;
+thread_local bool t_thrSample = false;        // hero pass: the in-hand sample taken before the arm IK
+thread_local bool t_thrGoodS = false;
+thread_local Mat4 t_thrOffS{};
+thread_local int t_thrJointS = -1, t_thrWristS = -1;
+static bool HeldThrowOn() {
+    static const bool on = config::GetFloat("held_throwable_fix", 1.f) > 0.5f;
+    return on;
+}
+static int64_t ThrQpc() {
+    LARGE_INTEGER q;
+    QueryPerformanceCounter(&q);
+    return q.QuadPart;
+}
+static int64_t ThrQpcPerMs() {
+    static int64_t f = 0;
+    if (!f) {
+        LARGE_INTEGER q;
+        QueryPerformanceFrequency(&q);
+        f = q.QuadPart / 1000;
+    }
+    return f > 0 ? f : 1;
+}
+static bool ThrHeld() {
+    return g_thrObj.load(std::memory_order_relaxed) && g_frameNo.load() - g_thrSeen.load(std::memory_order_relaxed) <= 30;
+}
+// exactly a crystal: a game object whose skeleton points back at it, named 'gothrowablevibrate' (kind 0, the right hand)
+// or - D-324b - 'gocarrybifrostlighttop' (kind 1, the carried Bifrost light crystal, the left hand). -1: neither
+
+static int ThrIsCrystalSeh(uint8_t* obj, uint8_t** skelOut) {
+    __try {
+        uint8_t* sk = *(uint8_t**)(obj + 0x238);
+        if (!sk || *(uint8_t**)(sk + 0x50) != obj) return -1;
+        const char* s = *(const char* const*)(obj + 0x38);
+        if (!s) return -1;
+        const int kind = !strcmp(s, kHeldThrowName) ? 0 : !strcmp(s, kCarryCrystalName) ? 1 : -1;
+        if (kind >= 0) *skelOut = sk;
+        return kind;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+// still hung on Kratos by the game (a thrown crystal has no parent: sub_1408a74b0)
+static bool ThrLinkedSeh(uint8_t* obj, uint8_t* hero) {
+    __try {
+        uint8_t* parent = *(uint8_t**)(obj + 0x140);
+        return parent && *(const int*)(obj + 0x148) == 2 && *(uint8_t**)(parent + 0x238) == hero;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// the crystal's expected root (local x the drawn joint), when both are known and the joint is this frame's
+static bool ThrExpected(Mat4* E) {
+    bool ok = false;
+    AcquireSRWLockShared(&g_thrLock);
+    if (g_thr.haveC && g_thr.haveP && g_frameNo.load() - g_thr.pFrame <= 3) {
+        *E = Mul(g_thr.C, g_thr.P);
+        ok = true;
+    }
+    ReleaseSRWLockShared(&g_thrLock);
+    return ok;
+}
+// evidence: other owners reading the held crystal's Kratos joint (left as they are - named for the next step)
+static void ThrOtherReader(uint8_t* owner, int j) {
+    static std::atomic<uint8_t*> named[8];
+    int freeSlot = -1;
+    for (int i = 0; i < 8; ++i) {
+        uint8_t* o = named[i].load(std::memory_order_relaxed);
+        if (o == owner) return;
+        if (!o && freeSlot < 0) freeSlot = i;
+    }
+    if (freeSlot < 0) return;
+    uint8_t* expect = nullptr;
+    if (!named[freeSlot].compare_exchange_strong(expect, owner)) return;
+    char nm[48];
+    if (!ObjNameSeh(owner, nm, sizeof(nm))) strcpy_s(nm, "(no name)");
+    uint8_t* osk = ObjSkeletonSeh(owner);
+    Log("fp: while the crystal is held, '%s' (%p, %s) also reads Kratos joint %d - left as it is (D-322 evidence)", nm,
+        owner, osk && AnySkeletonSeh(osk) ? "skinned" : "no skeleton", j);
+}
+// hk_LinkWorld: the crystal's own link -> the drawn joint. True when the read was the crystal's own.
+static bool HeldThrowLink(uint8_t* link, float* out, uint8_t* parent, int type) {
+    if (type != 2 || FpMode() != 1 || !HeldThrowOn()) return false;
+    uint8_t* hero = g_heroSkel.load(std::memory_order_relaxed);
+    if (!hero || ObjSkeletonSeh(parent) != hero) return false;
+    uint8_t* owner = link - 0xa0;
+    const int j = *(const int16_t*)(link + 0xac);
+    if (j < 0) return false;
+    uint8_t* sk = nullptr;
+    const int kind = ThrIsCrystalSeh(owner, &sk);
+    if (kind < 0) {
+        if (ThrHeld() && j == g_thrJoint.load(std::memory_order_relaxed)) ThrOtherReader(owner, j);
+        return false;
+    }
+    const uint64_t f = g_frameNo.load();
+    if (owner != g_thrObj.load() || sk != g_thrSkel.load() || j != g_thrJoint.load() || kind != g_thrKind.load()) {
+        AcquireSRWLockExclusive(&g_thrLock);
+        if (g_thr.obj != owner || g_thr.skel != sk || g_thr.joint != j || g_thr.kind != kind) {
+            const bool sameJoint = g_thr.joint == j && g_thr.haveG && g_thr.kind == kind;
+            const Mat4 keepG = g_thr.G;
+            g_thr = HeldThrowState{};
+            g_thr.obj = owner;
+            g_thr.skel = sk;
+            g_thr.joint = j;
+            g_thr.kind = kind;
+            g_thr.hand = kind == 0 ? 1 : 0;
+            if (sameJoint) { g_thr.G = keepG; g_thr.haveG = true; }  // (a start value; the next grab re-measures it)
+            g_thrSeen.store(f, std::memory_order_relaxed);  // (before the pointer: a hero pass must not take it as let go)
+            g_thrKind = kind;
+            g_thrHand = g_thr.hand;
+            g_thrObj = owner;
+            g_thrSkel = sk;
+            g_thrJoint = j;
+            Log("fp: crystal '%s' (object %p, skeleton %p, %d joints) held on Kratos joint %d - kept in the drawn %s hand "
+                "(%s)", kind == 0 ? kHeldThrowName : kCarryCrystalName, owner, sk, (int)(uint16_t)*(int16_t*)(sk + 0x38), j,
+                g_thr.hand ? "right" : "left", kind == 0 ? "D-322" : "D-324");
+        }
+        ReleaseSRWLockExclusive(&g_thrLock);
+    }
+    g_thrSeen.store(f, std::memory_order_relaxed);
+    Mat4 P{};
+    bool ok = false;
+    AcquireSRWLockShared(&g_thrLock);
+    if (g_thr.obj == owner && g_thr.haveP && f - g_thr.pFrame <= 3) {
+        P = g_thr.P;
+        ok = true;
+    }
+    ReleaseSRWLockShared(&g_thrLock);
+    if (ok) {
+        memcpy(out, &P, sizeof(P));
+        ++g_thrLinkOurs;
+    } else {
+        ++g_thrLinkGame;  // no grip yet: the game's answer
+    }
+    t_thrAnsObj = owner;
+    memcpy(&t_thrAns, out, sizeof(Mat4));
+    t_thrAnsQpc = ThrQpc();
+    return true;
+}
+// world of hero joint j from this pass's locals alone (the root param x locals down the chain - as arms.cpp AnimWorldOf)
+static Mat4 ThrAnimJoint(const uint8_t* mats, const uint8_t* locs, int n, int j) {
+    int chain[64];
+    int k = 0, c = j;
+    while (c > 0 && k < 64) { chain[k++] = c; c = JointParent(c); }
+    Mat4 M = *(const Mat4*)(mats + ((size_t)(uint16_t)n + (c < 0 ? 0 : c)) * 0x40);
+    for (int i = k - 1; i >= 0; --i) M = Mul(*(const Mat4*)(locs + (size_t)chain[i] * 0x40), M);
+    return M;
+}
+static void HeldThrowReport() {
+    static std::atomic<ULONGLONG> tLog{0};
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG t0 = tLog.load();
+    if (!t0) { tLog = now; return; }
+    if (now - t0 < 3000 || !tLog.compare_exchange_strong(t0, now)) return;
+    bool haveG, frozen, haveC;
+    float gDist;
+    AcquireSRWLockShared(&g_thrLock);
+    haveG = g_thr.haveG;
+    frozen = g_thr.frozen;
+    haveC = g_thr.haveC;
+    gDist = sqrtf(g_thr.G.m[3][0] * g_thr.G.m[3][0] + g_thr.G.m[3][1] * g_thr.G.m[3][1] + g_thr.G.m[3][2] * g_thr.G.m[3][2]);
+    ReleaseSRWLockShared(&g_thrLock);
+    Log("fp: held crystal 3 s - its link reads given the drawn hand %u (no grip yet %u) | world passes placed %u (kept, "
+        "no grip / local yet %u) | moved after a pass %u | palette builds %u (moved %u) | hero passes: in-hand samples %u, "
+        "weapon point off the hand (skipped) %u | grip %s (%.3f m from the wrist), local %s (rejected %u) (D-322)",
+        g_thrLinkOurs.exchange(0), g_thrLinkGame.exchange(0), g_thrPlaced.exchange(0), g_thrKept.exchange(0),
+        g_thrPost.exchange(0), g_thrPal.exchange(0), g_thrPalMoved.exchange(0), g_thrGood.exchange(0), g_thrOff.exchange(0),
+        !haveG ? "none" : frozen ? "FIXED" : "following the game", gDist, haveC ? "known" : "none", g_thrCReject.exchange(0));
+}
+// hero world pass, after Publish and before the arm IK: the crystal's Kratos joint against the right wrist (animated)
+static void HeldThrowHeroAnim(uint8_t* skel) {
+    t_thrSample = false;
+    if (!HeldThrowOn()) return;
+    static std::atomic<uint8_t*> wFor{nullptr};
+    static std::atomic<int> wIdx[2] = {-1, -1};
+    if (wFor.load(std::memory_order_relaxed) != skel) {
+        wIdx[0] = FindJointByHash(0x6de47b0b82506234ull);  // the left wrist
+        wIdx[1] = FindJointByHash(0x3626a7d4c72e93aeull);  // the right wrist
+        wFor = skel;
+    }
+    if (!g_thrObj.load(std::memory_order_relaxed)) return;
+    if (!ThrHeld()) {  // its link has not been read on Kratos for 30 frames: let go (thrown / gone)
+        AcquireSRWLockExclusive(&g_thrLock);
+        if (g_thr.obj && g_frameNo.load() - g_thrSeen.load() > 30) {
+            Log("fp: crystal let go (object %p) (D-322)", g_thr.obj);
+            const Mat4 keepG = g_thr.G;
+            const bool hadG = g_thr.haveG && g_thr.kind == 0;
+            const int keepJ = g_thr.joint;
+            g_thr = HeldThrowState{};
+            g_thr.G = keepG;  // (only a start value for the next crystal on the same joint)
+            g_thr.haveG = hadG;
+            g_thr.joint = keepJ;
+            g_thrObj = nullptr;
+            g_thrSkel = nullptr;
+        }
+        ReleaseSRWLockExclusive(&g_thrLock);
+        return;
+    }
+    if (FpMode() != 1) return;
+    const int w = wIdx[g_thrHand.load() == 0 ? 0 : 1].load(std::memory_order_relaxed);
+    const int j = g_thrJoint.load(std::memory_order_relaxed);
+    const int n = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+    if (w < 0 || j < 0 || w >= n || j >= n) return;
+    const uint8_t* mats = *(const uint8_t**)(skel + 0x58);
+    const uint8_t* locs = PassLocals(skel);
+    if (!mats || !locs) return;
+    const Mat4 A = ThrAnimJoint(mats, locs, n, j), W = ThrAnimJoint(mats, locs, n, w);
+    t_thrOffS = Mul(A, AffineInverse(W));
+    const float d = sqrtf(t_thrOffS.m[3][0] * t_thrOffS.m[3][0] + t_thrOffS.m[3][1] * t_thrOffS.m[3][1] +
+                          t_thrOffS.m[3][2] * t_thrOffS.m[3][2]);
+    t_thrGoodS = d < (g_thrKind.load() == 1 ? 0.5f : 0.3f);  // D-324b: the carried crystal by continuity (below)
+    t_thrJointS = j;
+    t_thrWristS = w;
+    t_thrSample = true;
+}
+// hero world pass, after the arm IK: the drawn joint = grip x the drawn right wrist (this pass)
+static void HeldThrowHeroDrawn(uint8_t* skel) {
+    if (!t_thrSample) return;
+    t_thrSample = false;
+    const int n = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+    const uint8_t* mats = *(const uint8_t**)(skel + 0x58);
+    if (t_thrWristS < 0 || t_thrWristS >= n || !mats) return;
+    const Mat4 Dw = *(const Mat4*)(mats + ((size_t)(uint16_t)n + t_thrWristS) * 0x40);
+    Mat4 iw, ie;
+    const int hand = g_thrHand.load() == 0 ? 0 : 1;
+    const bool armOn = ArmsIkResult(hand, &iw, &ie);
+    const float wgt = ArmsIkWeight();
+    AcquireSRWLockExclusive(&g_thrLock);
+    if (g_thr.obj && g_thr.joint == t_thrJointS && g_thr.kind == 1) {
+        // D-324b: continuity - lock on 3 agreeing passes, then only passes near the locked grip; 10 agreeing elsewhere move it
+        auto near5 = [](const Mat4& a, const Mat4& b, float d) {
+            const float x = a.m[3][0] - b.m[3][0], y = a.m[3][1] - b.m[3][1], z = a.m[3][2] - b.m[3][2];
+            return x * x + y * y + z * z < d * d;
+        };
+        bool good = false;
+        if (t_thrGoodS) {
+            const bool nearG = g_thr.haveG && near5(t_thrOffS, g_thr.G, 0.08f);
+            if (nearG) {
+                good = true;
+                g_thr.candN = 0;
+            } else {
+                if (g_thr.candN > 0 && near5(t_thrOffS, g_thr.cand, 0.05f)) ++g_thr.candN;
+                else { g_thr.cand = t_thrOffS; g_thr.candN = 1; }
+                if (g_thr.candN >= (g_thr.haveG ? 10 : 3)) { good = true; g_thr.candN = 0; }
+            }
+        }
+        t_thrGoodS = good;
+    }
+    ++(t_thrGoodS ? g_thrGood : g_thrOff);
+    if (g_thr.obj && g_thr.joint == t_thrJointS) {
+        if (!g_thr.frozen && t_thrGoodS) {
+            g_thr.G = t_thrOffS;
+            g_thr.haveG = true;
+            ++g_thr.goodN;
+        }
+        // D-322b (owner: "picked up again from the ground it is ~7 cm out of my hand"; owner log: that pickup froze after 6
+        // samples at 0.190 m, every spawner grab at 0.093 m): the grip is the session's once one hold settled it (>= 100
+        // in-hand samples) - kept for every later pickup, the axe's "calibrated" rule
+        static Mat4 sessionG{};
+        static bool haveSessionG = false;
+        const bool red = g_thr.kind == 0;  // (the session grip is the dragon fight throwable's)
+        if (red && !g_thr.frozen && armOn && wgt >= 0.999f && haveSessionG) {
+            g_thr.G = sessionG;
+            g_thr.haveG = true;
+            g_thr.goodN = g_thr.goodN < 100 ? 100 : g_thr.goodN;
+        }
+        if (red && !g_thr.frozen && armOn && wgt >= 0.999f && g_thr.goodN >= 100 && !haveSessionG) {
+            sessionG = g_thr.G;
+            haveSessionG = true;
+        }
+        if (!g_thr.frozen && armOn && wgt >= 0.999f && g_thr.goodN >= 100) {
+            g_thr.frozen = true;
+            Log("fp: crystal grip FIXED in the %s hand (%.3f m from the wrist, from %u of the game's in-hand passes) (D-322)",
+                hand ? "right" : "left", sqrtf(g_thr.G.m[3][0] * g_thr.G.m[3][0] + g_thr.G.m[3][1] * g_thr.G.m[3][1] + g_thr.G.m[3][2] * g_thr.G.m[3][2]),
+                g_thr.goodN);
+        } else if (g_thr.frozen && (!armOn || wgt < 0.999f)) {
+            g_thr.frozen = false;  // the arm plays the game's animation again (the throw): the game's grip on the drawn hand
+            g_thr.goodN = 0;
+            Log("fp: crystal grip follows the game's animation (the arm is animated) (D-322)");
+        }
+        // fixed on the controller hand: every pass (its drawn wrist is the IK one); while following the game's animation
+        // only an in-hand pass (an alternating pass may carry an off-hand pose for the animated wrist as well)
+        if (g_thr.haveG && (g_thr.frozen || t_thrGoodS)) {
+            g_thr.P = Mul(g_thr.G, Dw);
+            g_thr.haveP = true;
+            g_thr.pFrame = g_frameNo.load();
+        }
+    }
+    ReleaseSRWLockExclusive(&g_thrLock);
+    HeldThrowReport();
+}
+// world pass of the crystal (world-space root): its local x the drawn joint. True = handled (no other rule may move it)
+static bool HeldThrowPass(uint8_t* skel, const float* root, float* out) {
+    if (!skel || skel != g_thrSkel.load(std::memory_order_relaxed) || !HeldThrowOn() || FpMode() != 1 || !ThrHeld())
+        return false;
+    uint8_t* obj = g_thrObj.load();
+    uint8_t* hero = g_heroSkel.load(std::memory_order_relaxed);
+    if (!obj || !hero || !ThrLinkedSeh(obj, hero)) return false;  // thrown: the game's flight
+    const Mat4& R = *(const Mat4*)root;
+    const int nj = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+    const uint8_t* mm = *(const uint8_t**)(skel + 0x58);
+    const bool selfFed = (const uint8_t*)root >= mm && (const uint8_t*)root < mm + (size_t)nj * 0x80;
+    // its local, from the parent this pass was built from (this thread's answer to its link a moment ago)
+    if (!selfFed && t_thrAnsObj == obj && ThrQpc() - t_thrAnsQpc < 2 * ThrQpcPerMs() &&
+        fabsf(t_thrAns.m[3][0]) + fabsf(t_thrAns.m[3][1]) + fabsf(t_thrAns.m[3][2]) >= 1.f) {
+        const Mat4 Cn = Mul(R, AffineInverse(t_thrAns));
+        t_thrAnsObj = nullptr;
+        const float cl = sqrtf(Cn.m[3][0] * Cn.m[3][0] + Cn.m[3][1] * Cn.m[3][1] + Cn.m[3][2] * Cn.m[3][2]);
+        if (cl < 1.5f) {
+            AcquireSRWLockExclusive(&g_thrLock);
+            if (g_thr.obj == obj) {
+                if (!g_thr.haveC || MatDist(Cn, g_thr.C) < 0.05f || ++g_thr.cBad >= 3) {
+                    g_thr.C = Cn;
+                    g_thr.haveC = true;
+                    g_thr.cBad = 0;
+                } else {
+                    ++g_thrCReject;
+                }
+            }
+            ReleaseSRWLockExclusive(&g_thrLock);
+        }
+    }
+    Mat4 E;
+    if (ThrExpected(&E)) {
+        memcpy(out, &E, sizeof(E));
+        ++g_thrPlaced;
+    } else {
+        memcpy(out, root, sizeof(Mat4));
+        ++g_thrKept;
+    }
+    return true;
+}
+// after any pass of the crystal (also those fed world-space locals with an identity root): its root on the drawn joint
+static void HeldThrowPost(uint8_t* skel) {
+    if (!skel || skel != g_thrSkel.load(std::memory_order_relaxed) || !HeldThrowOn() || FpMode() != 1 || !ThrHeld())
+        return;
+    uint8_t* obj = g_thrObj.load();
+    uint8_t* hero = g_heroSkel.load(std::memory_order_relaxed);
+    Mat4 E;
+    if (!obj || !hero || !ThrLinkedSeh(obj, hero) || !ThrExpected(&E)) return;
+    const int n = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+    uint8_t* mats = *(uint8_t**)(skel + 0x58);
+    if (n < 1 || !mats) return;
+    Mat4* W = (Mat4*)(mats + (size_t)(uint16_t)n * 0x40);
+    if (fabsf(W[0].m[3][0]) + fabsf(W[0].m[3][1]) + fabsf(W[0].m[3][2]) < 1.f) return;  // a model-space pass
+    if (MatDist(W[0], E) <= 0.02f) return;
+    const Mat4 D = Mul(AffineInverse(W[0]), E);
+    for (int j = 0; j < n; ++j) W[j] = Mul(W[j], D);
+    ++g_thrPost;
+}
+// right before the crystal's skinning palette is built (render submission): the final point, as the axe's gem (D-170)
+static void HeldThrowPalette(uint8_t* inst) {
+    uint8_t* sk = g_thrSkel.load(std::memory_order_relaxed);
+    if (!sk || !inst || *(uint8_t**)(inst + 0x10) != sk || !HeldThrowOn() || FpMode() != 1 || !ThrHeld()) return;
+    uint8_t* obj = g_thrObj.load();
+    uint8_t* hero = g_heroSkel.load(std::memory_order_relaxed);
+    Mat4 E;
+    if (!obj || !hero || !ThrLinkedSeh(obj, hero) || !ThrExpected(&E)) return;
+    Mat4* W = *(Mat4**)(inst + 0x18);
+    const int n = (int)(uint16_t)*(int16_t*)(sk + 0x38);
+    if (!W || n < 1) return;
+    ++g_thrPal;
+    if (fabsf(W[0].m[3][0]) + fabsf(W[0].m[3][1]) + fabsf(W[0].m[3][2]) < 1.f || MatDist(W[0], E) <= 0.02f) return;
+    const Mat4 D = Mul(AffineInverse(W[0]), E);
+    for (int j = 0; j < n; ++j) W[j] = Mul(W[j], D);
+    ++g_thrPalMoved;
+}
 bool PubJointByIndex(int j, Mat4* out);  // a published hero joint by index (below)
 static void ItemLinkReport() {
     static std::atomic<ULONGLONG> tLog{0};
@@ -4586,6 +5026,7 @@ float* __fastcall hk_LinkWorld(uint8_t* link, float* out, char flag) {
         if (c && (*(c + 0xb0) & 1) && *(const int*)(c + 0xac) != 1) parent = *(uint8_t**)(c + 0x28);
     }
     if (!parent) return r;
+    if (HeldThrowLink(link, out, parent, type)) return r;  // D-322: the held crystal's own link -> the drawn hand
     if (FpMode() == 1 && DrawnItemLinks()) ItemLinkFix(link, out, parent);  // D-229
     static const bool gemLinks = config::GetFloat("gem_link_hook", 1.f) > 0.5f;
     if (!gemLinks) return r;
@@ -4925,6 +5366,7 @@ void __fastcall hk_PaletteBuild(uint8_t* inst, void* a2, void* a3, void* a4) {
     static const bool gem = config::GetFloat("gem_palette_hook", 1.f) > 0.5f;
     if (gem) GemPaletteFix(inst);
     PaletteHeadHide(inst);
+    HeldThrowPalette(inst);  // D-322
     o_PaletteBuild(inst, a2, a3, a4);
     stereo::R1SkinPrevious(inst, a2, a3, a4);  // dlss-vr: eye 1's previous pose = eye 0's
     stereo::CharacterTextures(a2);             // D-303: characters' textures at full size in VR
@@ -6450,6 +6892,27 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
             ++g_passes;
             return;
         }
+        // D-326 (owner: "move the boss health bar more up - the boss's name is part of the bar"): STATIC r_ui.wad - the
+        // boss bar is the UI object gobosshealthmeter (MDL_bosshealthmeter, 10 joints; its prototype carries the name,
+        // SCP_bossName), root hash kHudBossMeter, placed in UI units (x +-16, y +-9, +y up - Kratos' bar sits at y -7):
+        // its root moved boss_bar_up (2.5) units up, the name with it. Every mode (VR's bottom edge is hard to see)
+        if (root && skel && (int)(uint16_t)*(int16_t*)(skel + 0x38) >= 4) {
+            static const float bossUp = config::GetFloat("boss_bar_up", 2.5f);
+            const uint64_t* hb = bossUp != 0.f ? *(const uint64_t**)(skel + 0x30) : nullptr;
+            if (hb && !IsBadReadPtr(hb, 8) && hb[0] == kHudBossMeter) {
+                const int nb = (int)(uint16_t)*(int16_t*)(skel + 0x38);
+                const uint8_t* mb = *(const uint8_t**)(skel + 0x58);
+                const bool selfFedB = (const uint8_t*)root >= mb && (const uint8_t*)root < mb + (size_t)nb * 0x80;
+                if (!selfFedB) {
+                    memcpy(r, root, sizeof(r));
+                    r[13] += bossUp;
+                    o_LocalToWorld(skel, local, r, flag);
+                    t_passLocal = local;
+                    ++g_passes;
+                    return;
+                }
+            }
+        }
         // D-110 (code audit M2): outside gameplay first person, with Kratos' body not turned, the mod places no other
         // object (glue, axe effects, Blades, carried items, lunge ghosts are all F1 rules): every skinned object in the
         // world went through the checks below (locks, pointer probes) on the animation job threads, VR off included.
@@ -6570,7 +7033,9 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
             const uint64_t* h0 = nj <= 4 ? *(const uint64_t**)(skel + 0x30) : nullptr;
             Mat4 hd;
             bool talKept = false;
-            if (!gl && !attachedObj && (LinkedFix(skel, root, r) || TalismanFix(skel, root, r) ||
+            if (!gl && !attachedObj && HeldThrowPass(skel, root, r)) {
+                use = r;  // D-322: a held crystal - its local x the drawn hand's joint; no other rule after it
+            } else if (!gl && !attachedObj && (LinkedFix(skel, root, r) || TalismanFix(skel, root, r) ||
                                         (talKept = t_talismanKept))) {
                 if (!talKept) {
                     use = r;  // D-162: an item hung on Kratos (Mimir, the talisman ...) on the drawn joint
@@ -6715,6 +7180,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         }
         EffectJumpSample(skel, root, use, (uintptr_t)_ReturnAddress());
         o_LocalToWorld(skel, local, use, flag);
+        HeldThrowPost(skel);  // D-322: a held crystal's root on the drawn hand after every pass (world-space locals too)
         if (skel && (uint16_t)*(int16_t*)(skel + 0x38) <= 16) SatNotePass(skel, use);  // D-094: for the draw-time re-place
         t_passLocal = local;
         root = use;
@@ -6816,6 +7282,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
         g_lastHeroPassQpc = q.QuadPart;
     }
     Publish(skel);  // the ANIMATED pose (before the head collapse and the arm IK): the camera must not see our edits
+    HeldThrowHeroAnim(skel);  // D-322: a held crystal's Kratos joint against the animated right wrist (this pass)
     // D-092 (owner: the neck still flashes "every ~2 s, less than before"; owner log: ~1 in 3 frames has a hero pass inside
     // the draw window): such a pass puts the real neck back at its start (HideRestore) and only hid it again at its END
     // (after ApplyPlan / ArmsApply) - the whole pass long a recording job reading the hero could draw the real neck. Now
@@ -6824,6 +7291,7 @@ void __fastcall hk_LocalToWorld(uint8_t* skel, uint8_t* local, float* root, char
     if (g_drawHide.load() && skel == g_heroSkel.load()) HideApply(skel, true);
     ApplyPlan(skel);
     ArmsApply(skel);
+    HeldThrowHeroDrawn(skel);  // D-322: ... and on the DRAWN right wrist (after the arm IK)
     // D-082 (owner: "the bottom neck and neck beard are flashing"): the neck is shrunk for the drawing only, and every
     // hero pass first puts it back (HideRestore). A pass run while a frame draws (eyesync re-runs the hero pass before
     // eye 0 in ~15% of frames) left that frame with the real neck: it is shrunk again as the pass ends
@@ -7359,7 +7827,8 @@ void BodyPostAnim() {
             Log("fp: skinning palette hook (axe glow joints, hidden head) %s", g_paletteHooked.load() ? "installed" : "FAILED");
         }
         // D-165: the axe glow's joints on the drawn axe when READ; D-229: reads through items on Kratos (their lights)
-        if (config::GetFloat("gem_link_hook", 1.f) > 0.5f || config::GetFloat("drawn_item_links", 1.f) > 0.5f)
+        if (config::GetFloat("gem_link_hook", 1.f) > 0.5f || config::GetFloat("drawn_item_links", 1.f) > 0.5f ||
+            HeldThrowOn())  // D-322: the held crystal's own link
             Log("fp: link reads hook (axe glow joints, items on Kratos) %s",
                 DetourInstall(kLinkWorld, (void*)&hk_LinkWorld, (void**)&o_LinkWorld) ? "installed" : "FAILED");
         if (config::GetFloat("gem_set_hook", 1.f) > 0.5f)  // D-164: the axe glow's joints on the drawn axe when written

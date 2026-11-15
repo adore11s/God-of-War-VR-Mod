@@ -16,6 +16,8 @@
 #include <windows.h>
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <initializer_list>
 
 namespace gowvr::fp {
 namespace {
@@ -78,6 +80,41 @@ void FpEye(float out[3]) { out[0] = g_lastEye[0]; out[1] = g_lastEye[1]; out[2] 
 // sequences chain with a few frames of ordinary moves between them). Not every "cs" move: csDefBlockParry01 (a parry),
 // csDraugr00BareRageKillRip (a finisher) are ordinary combat. D-192: csMMA* is the mounted brawl on Baldur (it was
 // wrongly counted as ordinary combat here). gowvr.ini scripted_as_cutscene 0 = off.
+// D-320: a move by its exact name (case-insensitive; a blend "a#b" counts by its first move), never by a prefix
+static bool AnimIsOneOf(const char* a, std::initializer_list<const char*> names) {
+    if (!a) return false;
+    size_t n = 0;
+    while (a[n] && a[n] != '#') ++n;
+    for (const char* x : names)
+        if (strlen(x) == n && _strnicmp(a, x, n) == 0) return true;
+    return false;
+}
+// D-319 the ogre ride (r_heroa00.as, all of its moves)
+static const std::initializer_list<const char*> kOgreRide = {
+    "csJotunnRageKillEnter", "csJotunnRageKillIdle", "csJotunnRageKillLight", "csJotunnRageKillHeavy",
+    "csJotunnRageKillReEnter", "csJotunnRageKillReject", "csJotunnRageKillExit", "csJotunnRageTurnOnSpot90L",
+    "csJotunnRageTurnOnSpot90R"};
+// D-320 the Hraezlyr fight's electric-breath sequence (r_heroa00.as)
+static const std::initializer_list<const char*> kDragonBreath = {"csDragonElectricBreath_PartA",
+                                                                 "csDragonElectricBreath_PartB"};
+// D-323 the Hraezlyr fight's long move from stage 2 to stage 3 (owner log 2026-11-15: 227.4 - 237.0 s, then the spit)
+static const std::initializer_list<const char*> kDragonToStage3 = {"Stg2_DragonTransitionToStg3",
+                                                                   "Stg3_csDragonSpitKratosToStg3",
+                                                                   "Stg3_Pos02hitStunBombFace_trans",  // D-323b
+                                                                   "Stg3_csDragonFinisherStart",  // D-323c
+                                                                   "Stg3_csDragonFinisherLoop", "Stg3_csDragonFinisherExit",
+                                                                   "csDragonGrabExit",  // D-323d
+                                                                   "csSmashDragonFace",  // D-323f
+                                                                   "navSnowBlindShuffleLStart", "navSnowBlindShuffleL",  // D-323g
+                                                                   "navSnowBlindShuffleLStop", "navSnowBlindShuffleRStart",
+                                                                   "navSnowBlindShuffleR", "navSnowBlindShuffleRStop",
+                                                                   "csMagniParryThrow", "csModiParryThrow",  // D-323h
+                                                                   "csHitSnowBlindLeft", "csHitSnowBlindRight",  // D-323i
+                                                                   "csHitSnowBlindDeathBack", "csHitSnowBlindDeathFLeft",
+                                                                   "csHitSnowBlindDeathFRight", "csMagniSnowBlindParry"};
+// D-325 the final Baldur fight's grapple on the chisel (csChiselMMA_*) and the choke after it (csChokeMMA_*) - every such
+// move in r_heroa00.as, by exact name
+static const std::initializer_list<const char*> kChiselMma = {"phase2_csReadyChiselSlamEnter", "phase2_csReadyChiselSlamInAir", "phase2_csReadyChiselSlamExit", "phase2_csChiselSlamLift", "csChiselMMA_Def_AttHeavyCounterSonFail", "csChiselMMA_Def_AttHeavyCounterSonWhiff", "csChiselMMA_Def_AttHeavyLeftCounter", "csChiselMMA_Def_AttHeavyLeftCounterSonWhiff", "csChiselMMA_Def_AttHeavyLeftCounterSonWin", "csChiselMMA_Def_AttHeavyRightCounter", "csChiselMMA_Def_AttHeavyRightCounterSonWhiff", "csChiselMMA_Def_AttHeavyRightCounterSonWin", "csChiselMMA_Def_BlockHit", "csChiselMMA_Def_BlockHitLeft", "csChiselMMA_Def_BlockHitRight", "csChiselMMA_Def_BlockLoop", "csChiselMMA_Def_Death", "csChiselMMA_Def_DodgeLeftEnter", "csChiselMMA_Def_DodgeLeftLoop", "csChiselMMA_Def_DodgeRightEnter", "csChiselMMA_Def_DodgeRightLoop", "csChiselMMA_Def_Hit", "csChiselMMA_Def_HitLeft", "csChiselMMA_Def_HitRight", "csChiselMMA_Def_Idle", "csChiselMMA_Def_PunchCombo1", "csChiselMMA_Def_PunchCombo2", "csChiselMMA_Def_PunchCombo3", "csChiselMMA_Def_TransToHangMMA", "csChiselMMA_Hang_AttSonFail", "csChiselMMA_Hang_AttSonWhiff", "csChiselMMA_Hang_AttSonWin", "csChiselMMA_Hang_BaldurKickLoop", "csChiselMMA_Hang_Idle", "csChiselMMA_Hang_TransToChokeMMA", "csChokeMMA_SonDanger_KratosRageBurst", "csChokeMMA_SonDanger_Struggle", "csChokeMMA_SonMount_Idle", "csChokeMMA_SonMount_Struggle", "csChokeMMA_SonMount_TransSonDanger"};
 static bool ScriptedName(const char* a) {
     if (!a || !a[0]) return false;
     // D-233: Kratos being hit (Baldur's quick hits csBaldurRibShot* ...) stays gameplay F1 - frozen there (combat.cpp)
@@ -93,6 +130,27 @@ static bool ScriptedName(const char* a) {
     // D-248 (owner: "in the middle of the Baldur fight, the animation before Kratos picks up a tree - make that F3"): the
     // tree-trunk sequence - attTreeBatLoop (the "R1" wait at the trunk) and attTreeBatSwing - is a scripted scene
     if (_strnicmp(a, "atttreebat", 10) == 0) return true;
+    // D-319 (owner: "when Kratos gets on the ogre's back and rides him it's in F3, no motion controls"): the ogre ride -
+    // r_heroa00.as csJotunnRageKillEnter / Idle / Light / Heavy / ReEnter / Reject / Exit and csJotunnRageTurnOnSpot90L /
+    // 90R (the ogre is the game's "jotunn": r_jotunn00, its ride music SND_MX_*_ogre_cs_kill). A cutscene for F1 / F3; in
+    // F3 the arms are the animation's and the controllers a plain pad (grip R1 = Light, trigger R2 = Heavy). Owner: "keep
+    // it a finisher" - like the troll kill (D-210) it is also a finisher: with Finishers = Third person the game's camera
+    // wins (FinisherScene), with First person it is F3 (was F1 with motion controls). Not the ogre grabbing Kratos
+    // (csJotunnGrab*) nor Atreus' mount (csSonJotunnMount). D-320 (owner: "don't apply things because of a prefix"):
+    // these exact names only
+    if (AnimIsOneOf(a, kOgreRide)) return true;
+    // D-320 (owner, the Hraezlyr fight near its end: "I pressed the first person shortcut and it didn't turn me to first
+    // person - it's an F3 cutscene"; "change this animation, not every other one"; owner log: csDragonElectricBreath_PartA
+    // at 124.1 s and _PartB at 135.4 s, sync moves, counted as finishers - third person for ~11 s, the shortcut toggled
+    // walking F1, which a finisher overrides): exactly these two moves are a scripted scene (F3; the shortcut toggles F3)
+    // and no finisher (FinisherName)
+    if (AnimIsOneOf(a, kDragonBreath)) return true;
+    // D-323 (owner: "at the very end the animation should have been F3 and not F1, that long animation"; owner log: it ran
+    // as F1 "riding (ogre / dragon)"): exactly these two moves are a scripted scene (F3)
+    if (AnimIsOneOf(a, kDragonToStage3)) return true;
+    // D-325 (owner: "the first time I changed the finisher perspective, that whole thing should not be finisher
+    // perspective, it should be F3"; owner log: csChiselMMA_Def_TransToHangMMA counted as a finisher): a scripted scene
+    if (AnimIsOneOf(a, kChiselMma)) return true;
     char low[96];
     size_t i = 0;
     for (; a[i] && i + 1 < sizeof(low); ++i) low[i] = (char)tolower((unsigned char)a[i]);
@@ -190,9 +248,12 @@ static bool OwnFollowUpName(const char* a) {
 }
 static bool FinisherName(const char* a) {
     if (!a || _strnicmp(a, "cs", 2) != 0 || OwnFollowUpName(a)) return false;
-    // (D-227: nor the blizzard's scripted shield moves csMaMo* - cutscenes, ScriptedName)
+    // (D-227: nor the blizzard's scripted shield moves csMaMo* - cutscenes, ScriptedName. D-319: the ogre ride
+    // csJotunnRage* stays a finisher (owner: "keep it a finisher") - third person with finisher_third_person, else F3)
+    // (D-320: nor the dragon's electric-breath sequence - an F3 scene, those two exact moves)
     return _strnicmp(a, "csbaldur", 8) != 0 && _strnicmp(a, "csmma", 5) != 0 && _strnicmp(a, "csdef", 5) != 0 &&
-           _strnicmp(a, "csmamo", 6) != 0;
+           _strnicmp(a, "csmamo", 6) != 0 && !AnimIsOneOf(a, kDragonBreath) && !AnimIsOneOf(a, kDragonToStage3) &&
+           !AnimIsOneOf(a, kChiselMma);
 }
 static bool FinisherScene() {
     if (config::GetFloat("finisher_third_person", 1.f) < 0.5f) return false;  // D-274: third person by default

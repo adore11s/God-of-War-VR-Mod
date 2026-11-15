@@ -9,3 +9,7 @@ settings_changed.txt
 
 # Build output (see CONTRIBUTING.md)
 build/
+
+# The owner's local dev tool (test cheats) - NEVER in this repository or a release
+gowvr_dev*
+dev/

@@ -23,6 +23,9 @@ void SharpUiDiagText(char* out, size_t n);
 // Render thread, right before an eye image is copied from the backbuffer and at Present: paste this eye's HUD
 void SharpUiFinish(ID3D11DeviceContext* ctx, ID3D11Texture2D* bb);
 void SharpUiOnResize();              // swapchain ResizeBuffers: drop our view of the backbuffer
+// D-329, Present after every headset copy: while the HUD goes to the headset as its own layer, the same HUD pasted into
+// the backbuffer for the desktop window (the game's picture has none then)
+void SharpUiDesktopHud(ID3D11DeviceContext* ctx, ID3D11Texture2D* bb);
 void SharpUiEnable(bool on);         // command "sharpui on|off", gowvr.ini sharp_ui
 void SharpUiReticleScale(float s);   // command "uireticle <s>", gowvr.ini ui_reticle_scale
 void SharpUiProbe(int frames);       // command "sharpui probe [frames]": where the UI view data goes (log)

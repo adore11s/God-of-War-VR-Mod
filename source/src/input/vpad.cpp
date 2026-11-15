@@ -5,6 +5,7 @@
 #include "../core/patch.h"
 #include "../core/config.h"
 #include "../vr/xr.h"
+#include "../vr/panel.h"
 #include <windows.h>
 #include <xinput.h>
 #include <algorithm>
@@ -31,6 +32,7 @@ std::atomic<uint64_t> g_polls{0};
 std::atomic<DWORD> g_pollThread{0};
 std::atomic<BYTE> g_gameLT{0};  // D-078: the left trigger the game last received (aiming)
 std::atomic<WORD> g_gameButtons{0};  // D-080: the buttons the game last received (L1 = block)
+std::atomic<bool> g_padA{false};     // D-331: the pads' own A as it arrived (before a welcome window takes it)
 // D-245 (owner: "when using mouse or gamepad I can't do head-based aiming"): the aim / look state of the devices the VR
 // mapping does not see
 std::atomic<ULONGLONG> g_extLookAt{0};   // a physical pad's right stick or the mouse turned the camera
@@ -162,6 +164,7 @@ DWORD MergeState(DWORD user, XINPUT_STATE* st, DWORD rc) {
 }
 
 void BuildPad(XINPUT_GAMEPAD& g) {
+    g_padA = (g.wButtons & XINPUT_GAMEPAD_A) != 0;  // D-331: a real pad / Steam Input's, before anything is merged
     XINPUT_GAMEPAD v{};
     if (NowMs() < g_holdUntil) v = g_hold;
     XINPUT_GAMEPAD c{};
@@ -190,6 +193,13 @@ void BuildPad(XINPUT_GAMEPAD& g) {
     // push while the player's stick rests (the position is held meanwhile, so Kratos does not step)
     if (const float nudge = fp::CombatStickNudge(); nudge > 0.f && abs(g.sThumbLX) < 8000 && abs(g.sThumbLY) < 8000)
         g.sThumbLY = Axis(nudge);
+    // D-331: while a welcome window is up, A closes it (vr/panel.cpp) and is not the game's (jump / interact) - as the VR
+    // controllers send the game nothing then
+    // (and until it is released: the press that closed the last window does not reach the game afterwards as a new one)
+    static bool swallowA = false;
+    if (!g_padA.load()) swallowA = false;
+    else if (vr::WelcomeActive()) swallowA = true;
+    if (vr::WelcomeActive() || swallowA) g.wButtons &= (WORD)~XINPUT_GAMEPAD_A;
     g_gameButtons = g.wButtons;
 }
 
@@ -318,11 +328,30 @@ void PsMerge(uint8_t* s, const XINPUT_GAMEPAD& g) {
     if (!s[0x68]) s[0x68] = 1;
 }
 
+// D-331: the real PlayStation pad's own buttons (the last sample read, before anything is merged in) - Cross 0x4000
+std::atomic<uint32_t> g_realPsBtn{0};
+std::atomic<ULONGLONG> g_realPsBtnAt{0};
+void NotePsButtons(void* data, int n) {
+    if (n <= 0 || !data) return;
+    g_realPsBtn = *(const uint32_t*)((const uint8_t*)data + (size_t)(n - 1) * kPsSample);
+    g_realPsBtnAt = GetTickCount64();
+    // Cross closes the welcome window and is not the game's - until released (as A in BuildPad)
+    static bool swallow = false;
+    if (!(g_realPsBtn.load() & 0x4000)) swallow = false;
+    else if (vr::WelcomeActive()) swallow = true;
+    if (vr::WelcomeActive() || swallow)
+        for (int i = 0; i < n; ++i) *(uint32_t*)((uint8_t*)data + (size_t)i * kPsSample) &= ~0x4000u;
+}
+
 int hk_scePadRead(int h, void* data, int count) {
     if (!IsPsHandle(h) || !data || count < 1) return o_scePadRead(h, data, count);
     const bool fake = g_psFake.load();
     if (!PsMode()) {
-        if (!fake) return o_scePadRead(h, data, count);  // a real PlayStation pad, as it is
+        if (!fake) {  // a real PlayStation pad, as it is
+            const int r = o_scePadRead(h, data, count);
+            NotePsButtons(data, r);
+            return r;
+        }
         // no PlayStation pad and the Xbox mode: our handle reads disconnected - or, once the PlayStation mode was used
         // this session, connected and idle (so the switch back shows no "controller disconnected")
         PsNeutral((uint8_t*)data, g_psEverOn.load());
@@ -330,6 +359,7 @@ int hk_scePadRead(int h, void* data, int count) {
     }
     g_psEverOn = true;
     int n = fake ? 0 : o_scePadRead(h, data, count);
+    NotePsButtons(data, n);  // D-331 (before the virtual pad is merged in)
     if (n > 0) {  // D-245: the real PlayStation pad's own right stick (+6 / +7, 128 centre) and L2 (+8)
         const uint8_t* s = (const uint8_t*)data + (size_t)(n - 1) * kPsSample;
         NoteLook(fmaxf(fabsf(s[6] - 128.f), fabsf(s[7] - 128.f)) / 127.f);
@@ -453,6 +483,17 @@ UINT WINAPI hk_GetRawInputData(HRAWINPUT h, UINT cmd, LPVOID data, PUINT size, U
             labs(in->data.mouse.lLastX) + labs(in->data.mouse.lLastY) >= 2)
             g_extLookAt = GetTickCount64();  // D-245: the mouse turns the camera
     }
+    // D-331b (owner: "I pressed Enter and it activated something in the game"): the game reads the keyboard through raw
+    // input (its window procedure, win_platform WM_INPUT -> GetRawInputData). While a welcome window takes Enter (and until
+    // it is released after the last window closed) Enter reaches the game as "no key" (VKey / MakeCode 0xFF, which raw
+    // input readers ignore - KEYBOARD_OVERRUN_MAKE_CODE)
+    if (cmd == RID_INPUT && data && r != (UINT)-1 && r >= sizeof(RAWINPUTHEADER) + sizeof(RAWKEYBOARD)) {
+        RAWINPUT* in = (RAWINPUT*)data;
+        if (in->header.dwType == RIM_TYPEKEYBOARD && in->data.keyboard.VKey == VK_RETURN && vr::WelcomeTakesEnter()) {
+            in->data.keyboard.VKey = 0xFF;
+            in->data.keyboard.MakeCode = KEYBOARD_OVERRUN_MAKE_CODE;
+        }
+    }
     return r;
 }
 
@@ -566,6 +607,9 @@ int PadMode() { return g_padMode.load(); }
 WNDPROC g_prevWndProc = nullptr;
 LRESULT CALLBACK F10WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_F10) return 0;
+    // D-331b: Enter while a welcome window takes it - the window messages too (the game's WM_KEYDOWN / WM_KEYUP path)
+    if (((msg == WM_KEYDOWN || msg == WM_KEYUP) && wp == VK_RETURN) || (msg == WM_CHAR && wp == '\r'))
+        if (vr::WelcomeTakesEnter()) return 0;
     return CallWindowProcW(g_prevWndProc, h, msg, wp, lp);
 }
 
@@ -638,6 +682,28 @@ bool PlayerAimInput() {
 }
 bool ExternalLookActive() { return GetTickCount64() - g_extLookAt.load() < 150; }
 bool GameBlockHeld() { return (g_gameButtons.load() & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0; }
+
+// D-331 (owner: "a way to close the welcome windows without VR controllers - keyboard or gamepad; make it work with Steam
+// Input"): a real gamepad's A / Cross held now. Three sources, so every way a pad reaches the game counts:
+// - the pads' own A as it reached the game through XInput (g_padA, BuildPad): a real Xbox pad, and Steam Input's virtual Xbox pad
+//   (Steam Input gives a PlayStation / Switch / other pad to the game as XInput); the VR controllers send nothing while
+//   a welcome window is up (vrmap VrGamepad), so they are not in it then;
+// - XInput user 0 read directly (while the PlayStation pad mode keeps the game's XInput neutral), every 50 ms;
+// - the real PlayStation pad's own Cross from the game's scePadRead (either pad mode).
+// (A keyboard key from Steam Input's keyboard bindings reaches GetAsyncKeyState - vr/panel.cpp reads Enter.)
+bool PadConfirmHeld() {
+    if (g_padA.load()) return true;
+    const ULONGLONG now = GetTickCount64();
+    if ((g_realPsBtn.load() & 0x4000) && now - g_realPsBtnAt.load() < 300) return true;
+    static std::atomic<ULONGLONG> lastPoll{0};
+    static std::atomic<bool> xiA{false};
+    if (o_GetState && now - lastPoll.load() >= 50) {
+        lastPoll = now;
+        XINPUT_STATE xs{};
+        xiA = o_GetState(0, &xs) == ERROR_SUCCESS && (xs.Gamepad.wButtons & XINPUT_GAMEPAD_A);
+    }
+    return xiA.load();
+}
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms) {
     std::lock_guard<std::mutex> lk(g_mu);
     g_hold = {};

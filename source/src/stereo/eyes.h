@@ -30,6 +30,9 @@ int EyesRenderEye();
 void EyesAfr(bool on, bool mono = false);
 void EyesAfrKick(int eye);
 bool EyesAfrOn();   // AFR or mono: one kick per frame
+// D-329d render thread, after EyesOnPresent: the eye this Present's backbuffer holds in AFR (0 / 1), -1 = not AFR, mono,
+// or not captured this frame
+int EyesPresentEye();
 bool EyesMonoOn();  // D-294
 // Save both captured eye images to gowvr_logs/shots/<name>_eye0.png / _eye1.png (1/div scale). Command thread.
 void EyesShot(const char* name, int div);

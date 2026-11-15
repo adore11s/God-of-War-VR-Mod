@@ -31,6 +31,7 @@ bool CombatRageReady();                 // D-094: the Spartan Rage meter is full
 bool ContextHandAuthored(int h);        // this hand (0 left, 1 right) follows the animation, not the controller
 bool ContextBodyLocked();               // the body keeps the game's facing (does not turn with the head)
 bool ContextPlainButtons();             // right grip / trigger are plain R1 / R2 (no swing gestures)
+bool ContextCarryCrystal();             // D-324: carrying a crystal in the animated left hand
 bool ContextThrowable();                // a throwable in the hand: swings throw it without a fist
 bool CombatBladesFree();                // D-073: a Blades aimed move plays - Blades follow the game's pose in the world
 bool CombatSprinting();                 // the game's sprint ("navBrutalRun*") is playing

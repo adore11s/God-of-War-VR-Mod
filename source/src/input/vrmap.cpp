@@ -11,6 +11,7 @@
 #include "../fp/combat.h"
 #include "../fp/arms.h"
 #include "../fp/manual.h"
+#include "../fp/prompts.h"
 #include "../stereo/mutate.h"
 #include "vpad.h"
 #include "turning.h"
@@ -803,7 +804,14 @@ bool FistsClosed() { return g_fistsClosed.load(); }
 bool GripHeld(int h) { return h >= 0 && h < 2 && g_gripHeld[h]; }  // D-307
 
 bool VrGamepad(XINPUT_GAMEPAD* g) {
+    fp::PromptTextTick();  // D-312: the equip prompts' wording (first person + motion controls), also while VR is off
     if (!g_on.load()) return false;
+    // D-318 (owner: "make it mandatory they get through these windows"): while a welcome window is up the controllers
+    // only point at it (vr/panel.cpp) - the game gets nothing from them, and no grip is left held
+    if (vr::WelcomeActive()) {
+        g_gripHeld[0] = g_gripHeld[1] = g_shieldGrip = false;
+        return false;
+    }
     vr::InputSnapshot s = vr::XrInput();
     ULONGLONG now = GetTickCount64();
     const bool fresh = s.serial != g_lastSerial;
@@ -1097,6 +1105,15 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
         // = R3 (lock on), sent on release.
         static bool chord = false, used = false;
         static ULONGLONG r3Until = 0;
+        // D-313 (owner: "some prompts ask for the touchpad and I can't press it - press the right stick once and then move
+        // it in the touchpad's direction; it must not stop the turning"): a plain right stick click (released without a
+        // D-pad push, i.e. the R3 tap) arms touch_window_ms (800); pushing the stick UP (> 0.7, mostly vertical) within it
+        // = the touchpad (XInput View / Back, the button the game's touchpad prompts take on a pad), held for as long as
+        // the stick stays up (at least 150 ms). Only the stick's up / down is kept from the game meanwhile - sideways
+        // still turns.
+        static ULONGLONG touchArmUntil = 0, touchSince = 0;
+        static bool touchHeld = false;
+        static const ULONGLONG touchWindowMs = (ULONGLONG)fmaxf(config::GetFloat("touch_window_ms", 800.f), 100.f);
         // D-205 (owner: "I couldn't do any attacks with my axe for ~10 s - I was swinging but nothing happened"; owner log:
         // "right stick click + push -> D-pad right (sheathe)" at 382.3 s, then 16 s of swings judged as open-hand punches,
         // 6 such chords in the session - 2 sheathes, 4 quick turns - all while turning): the chord took a click and a
@@ -1139,6 +1156,7 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             chord = false;
             if (!used) {
                 r3Until = now + 150;
+                touchArmUntil = now + touchWindowMs;  // D-313: a push up right after this click = the touchpad
                 fp::CombatFinisherPressed();  // D-080: a stun finisher must not meet an attack hold
                 // D-087: F1 with the Blades - the plain right click (not the D-pad chord, not the combo) also flips the
                 // right Blade; R3 still goes to the game (lock-on / finisher)
@@ -1149,6 +1167,23 @@ bool VrGamepad(XINPUT_GAMEPAD* g) {
             }
         }
         if (now < r3Until) g->wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;     // lock on
+        // D-313: click, then up = the touchpad
+        {
+            const float x = R.stick[0], y = R.stick[1];
+            const bool upPush = y > 0.7f && y > 1.5f * fabsf(x);
+            if (!touchHeld && !R.stickClick && now < touchArmUntil && upPush) {
+                touchHeld = true;
+                touchSince = now;
+                touchArmUntil = 0;
+                vr::XrHaptic(1, 0.4f, 0.04f);
+                Log("vrmap: right stick click then up -> touchpad (View / Back) (D-313)");
+            }
+            if (touchHeld && y < 0.35f && now - touchSince >= 150) touchHeld = false;
+            if (touchHeld) {
+                g->wButtons |= XINPUT_GAMEPAD_BACK;
+                g->sThumbRY = 0;  // the push is the touchpad, not the camera; sideways turning stays
+            }
+        }
     }
     if (combo && comboRage && lc && rc) g->wButtons |= XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;  // D-094
     // D-087: a flipped Blade goes back to the normal grip when the Blades are put away / switched (or F1 ends)

@@ -2,48 +2,39 @@
 
 Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each eye with full head tracking, and you can switch to a first-person view through Kratos' eyes and fight with your own hands. Works with the Steam, Epic and GOG versions of the game.
 
-> ⚠️ **Work in progress.** It is playable but not finished; expect rough edges. First person and the motion controls are still being tuned.
-
-## Important: read before playing
-
-- **Only playing in third person?** Skip the first-person points below. Your controllers work like a gamepad.
-- **Game settings:** no need to change them. The installer does it.
-- **First person on / off:** hold your right hand next to your head and press **○ (PS VR2) / B (Meta Quest, Index)**. Press it while walking to switch first person for gameplay, or during a cutscene to switch it for cutscenes. By default it is on for gameplay and off for cutscenes. You can also change both in the VR settings panel.
-- **Tested:** only the first 2 hours of the game. Later parts may break or crash.
-- **Menus:** **tap** all **four face buttons** for Options / ☰. **Hold** them for the game menu. Meta Quest: the left **☰** button works too. In menus the sticks also work as the arrow buttons (D-pad).
-- **Health and Spartan Rage bars in first person:** above your **left hand** (while the game shows them - not during the opening credits).
-- **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
-- **Axe:** reach over your **right shoulder** with either hand and press **grip**. Throw: **hold the left trigger** and throw. Recall: **right grip** or **△ / Y**.
-- **Blades of Chaos:** reach over your **left shoulder** with either hand and press **grip**.
-- **Fists:** rest your fingers on the grips. Squeezing the left grip fully is the shield. Meta Quest: **press Y** for fists, press it again to open your hands.
-- **Finishers:** they play in third person; first person can be picked in the VR settings panel.
+> ⚠️ **Work in progress.** It is playable but not finished; expect rough edges. First person and the motion controls are still being tuned. **Tested:** only the first 2 hours of the game. Later parts may break or crash.
 
 ## What the mod does
 
-- **Native stereo rendering.** The game is drawn separately for each eye, with full head tracking.
+**In VR**
+
+- **True 3D for each eye.** The game is drawn separately for each eye, with full head tracking.
+- **Rendering method:** AFR (one eye per frame, the default), Native (both eyes every frame) or Mono (one picture for both eyes, the fastest), set in the VR settings panel.
 - **DLSS in VR.** Each eye keeps its own DLSS history and motion, so edges stay sharp and stable.
-- **First person** in normal gameplay and in cutscenes. You can see your whole body.
-- **Motion controls in first person:**
-  - **Fists:** light attacks. Rest your fingers on the grip buttons to make fists (Meta Quest: press **Y** to switch them on or off).
-  - **Leviathan Axe:** light attacks, throwing and recalling. Equip it by reaching over your right shoulder with either hand.
-  - **Shield:** press the left grip to defend yourself (Meta Quest: squeeze it fully).
-  - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
-  - **Blades of Chaos:** light attacks (more attacks are on the way). Equip them by reaching over your left shoulder with either hand.
-- **Finger detection.** Hover your fingers over the grip buttons and Kratos' fingers curl.
-- **3D audio** in first person: sounds follow your head.
-- **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
-- **Xbox or PlayStation (PSVR2) controls**, with matching button icons in the game (set in the VR settings panel).
-- **Smooth or snap turning** in first person, set in the VR settings panel.
-- **Finishers in first or third person**, set in the VR settings panel.
-- **Motion controls on or off** in first person (VR settings panel). Off: the controllers work like a gamepad and attacks play their normal animations.
-- **Axe weight** in first person (VR settings panel): the axe trails your hand and swings on a little, like a heavy weapon.
-- **Manual climbing** in first person (VR settings panel): grip walls, ledges, ropes and chains and pull yourself along with your own hands.
-- **Manual rowing** in first person (VR settings panel): row the boat with the paddle in both hands - close strokes go forward, wide sweeps turn.
-- **Compass in first person: Always or Head** (VR settings panel). Head: the compass shows only while you hold your left hand at the left side of your head.
-- **Rendering method:** Native (both eyes), AFR (one eye per frame) or Mono (one picture for both eyes, the fastest), set in the VR settings panel.
-- **Head-based aiming with any controller:** aim (VR left trigger, gamepad L2 or Left Ctrl on the keyboard) and the throw goes where you look.
 - **A square VR picture** that matches your headset's resolution automatically (or a size you choose), whatever your monitor's resolution.
+- **The window on your monitor** is 1280 x 720 while VR runs. Drag its edges to resize it; it stays 16:9. Your normal window comes back when VR ends.
+- **Game settings:** no need to change them. The installer does it.
+- **VR settings:** in the game's settings menu, a panel appears on the right. Point a controller and pull its trigger.
+- **Menus:** tap all **four face buttons** for Options / ☰ (Meta Quest: the left **☰** button works too). In menus the sticks also work as the arrow buttons (D-pad).
+- **Xbox or PlayStation (PS VR2) controls**, with matching button icons in the game (VR settings panel).
+- **Head-based aiming with any controller:** aim (VR left trigger, gamepad L2 or Left Ctrl on the keyboard) and the throw goes where you look.
 - **Rumble.** The game's controller vibration plays on your VR controllers.
+
+**First person** (only playing in third person? Skip this part: your controllers work like a gamepad)
+
+- **First person on / off:** hold your right hand next to your head and press **○ (PS VR2) / B (Meta Quest, Index)**. Press it while walking for gameplay, or during a cutscene for cutscenes. By default it is on for gameplay and off for cutscenes (also in the VR settings panel). You can see your whole body.
+- **Motion controls:**
+  - **Fists:** light attacks.
+  - **Leviathan Axe:** light attacks, throwing and recalling (**right grip** or **△ / Y**).
+  - **Shield:** squeeze the left grip fully.
+  - **Spartan Rage:** light attacks; move your hands from up to down for the heavy attack.
+  - **Blades of Chaos:** light attacks (more attacks are on the way).
+- **Finger detection.** Hover your fingers over the grip buttons and Kratos' fingers curl.
+- **Health and Spartan Rage bars** above your **left hand** (while the game shows them).
+- **3D audio:** sounds follow your head.
+- **You can feel walls.** Touching a wall makes your controllers vibrate, and your hands and head can't go through walls.
+- **Finishers** play in third person; first person can be picked in the VR settings panel.
+- **In the VR settings panel:** smooth or snap turning; motion controls on or off (off: the controllers work like a gamepad); axe weight (the axe trails your hand like a heavy weapon); manual climbing (grip walls, ledges, ropes and chains and pull yourself along); manual rowing (row the boat with the paddle in both hands); compass Always or Head (Head: only while your left hand is at the left side of your head).
 
 ## Install
 
@@ -52,18 +43,23 @@ Play **God of War (2018, PC)** in VR. Every frame is drawn in true 3D for each e
 3. Double-click **`Install VR mod.cmd`** in the `GOW_VR_MOD` folder. You only do this **once** (and again after downloading a new version).
 4. From now on, put your headset on and start the game as usual, from Steam, Epic, GOG or `GoW.exe`.
 
-VR turns on by itself as soon as the game starts, and SteamVR starts with it. Using Virtual Desktop (**VDXR**) or another OpenXR runtime instead? Connect your headset to it first. The mod's settings file (`gowvr.ini`) is created by itself the first time.
+VR turns on by itself as soon as the game starts, and SteamVR starts with it. Using Virtual Desktop (**VDXR**) or another OpenXR runtime instead? Connect your headset to it first. The mod's settings file (`gowvr.ini`) is created by itself the first time; every setting is explained in **[GUIDE.md](GUIDE.md)**.
 
 ## Controls
 
-| Button / key | What it does |
+| Button | What it does |
 |---|---|
 | **○ (PS VR2) / B (Meta Quest, Index) next to your head** | First person on / off - press it while walking for gameplay, during a cutscene for cutscenes |
 | **Tap all four face buttons** | Options / ☰ |
-| **Hold all four face buttons** | Game menu (map, skills, inventory) |
-| **F9** | VR off / on (play on your monitor, press again to go back to VR) |
 
-➡️ All controls, motion gestures, settings and fixes: **[GUIDE.md](GUIDE.md)**
+**First person with motion controls**
+
+| Action | How |
+|---|---|
+| **Equipping the axe** | Reach over your right shoulder and squeeze the grip |
+| **Equipping the Blades** | Reach over your left shoulder and squeeze the grip |
+| **Throwing the axe / Blades** | Hold the left trigger (Quest / Index) or L2 (PS VR2), then throw |
+| **Fist combat** | PS VR2 / Index: rest your fingers on the grips. Meta Quest: press Y |
 
 ## Uninstall
 
@@ -78,20 +74,32 @@ Open an issue on the mod's GitHub page (**Issues** → **New issue**) with a few
 | **The game crashed** | The newest **`crash_<date>.txt`** from **`gowvr_logs\crash_reports`** in your game folder |
 | **Something looks or works wrong, the game froze, or VR did not start** | **`gowvr_logs\gowvr.log`** from your game folder, right after quitting the game (if you have started the game again since, send **`gowvr.prev.log`** too) |
 | **The install or uninstall window showed an error** | A screenshot of that window |
+| **The bug happens at a certain place in the game** | A copy of your save (see below) |
 
 The mod writes these files itself while the game runs (`gowvr.log` is started fresh each time; the run before is kept as `gowvr.prev.log`).
 
 None of these files contain your user name or other personal information.
 
+**Sending your save:** close the game, then double-click **`Copy my save.cmd`** in the `GOW_VR_MOD` folder. It puts a zip named **`GoW_VR_save_<date>.zip`** on your Desktop. Attach that zip to your issue. It works for the Steam, Epic and GOG copies of the game. **Your saves are only read, never changed, moved or deleted.** The tool checks that each copy matches the original exactly, and it won't run while the game is open. The zip holds only the game's save file (`game.sav`), with no account name or ID.
+
+<details><summary>Copying the save by hand</summary>
+
+All three stores keep the save in the same place: **`%USERPROFILE%\Saved Games\God of War`** (paste that into the Explorer address bar). Inside is a folder named with a string of numbers or letters (your store account). Copy the **`game.sav`** file from it, with the game closed. Copy it, don't move it.
+</details>
+
 ## Known bugs (fixes coming soon)
 
 - **Combat isn't perfect yet.** Kratos sometimes teleports a little during attacks.
-- **VDXR (Virtual Desktop) has rendering issues**, such as flickering lights. Try AFR or Mono rendering (VR settings panel: Rendering method).
+- **Native rendering: light rays sometimes shoot out of flames or lights.** For now use AFR (VR settings panel: Rendering method; AFR is the default).
 
 ## Open source
 
 The mod is free and open source under the **MIT license**. The full source code is in the [`source`](source) folder.
 Anyone can fix, improve or build on it: see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 The mod includes the official OpenXR loader and JsonCpp: see **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.
+
+## Support the mod ☕
+
+The mod is free for everyone, and it always will be. Donating is never required. If you enjoy it and want to help me make more VR mods, any support on **[Ko-fi](https://ko-fi.com/frenchiecore)** is very much appreciated. Thank you!
 
 *Not affiliated with Sony Interactive Entertainment or Santa Monica Studio. No game files are included.*

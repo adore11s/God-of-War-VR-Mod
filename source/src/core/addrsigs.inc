@@ -179,6 +179,8 @@
 {0x1425314f0ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 48 63 9c 01 84 00 00 00"},  // src\stereo\mutate.cpp
 {0x142590b00ull, 1, 2, 6, 0, "8d 05 ?? ?? ?? ?? 4c 63 c9 49 8b f0"},  // src\stereo\r1.cpp, src\stereo\taaeyes.cpp
 {0x1427a2c48ull, 1, 3, 7, 0, "0f b1 05 ?? ?? ?? ?? 75 ?? 45 33 c9"},  // src\stereo\r1.cpp
+{0x142ccbc38ull, 1, 2, 6, 0, "03 2d ?? ?? ?? ?? 33 ff 49 89 5d 00"},  // src\fp\prompts.cpp
+{0x142ccbc50ull, 1, 2, 7, 0, "83 3d ?? ?? ?? ?? 00 48 8b fa 8b d9"},  // src\fp\prompts.cpp
 {0x142d19024ull, 1, 2, 6, 0, "63 05 ?? ?? ?? ?? 41 b8 01 00 00 00"},  // src\stereo\eyes.cpp, src\stereo\r1.cpp
 {0x142d1b5d4ull, 1, 2, 6, 0, "8b 35 ?? ?? ?? ?? 41 bd 01 00 00 00"},  // src\stereo\mutate.cpp
 {0x142d24d04ull, 1, 2, 6, 0, "89 1d ?? ?? ?? ?? 48 83 c4 30 5b c3"},  // src\stereo\r1.cpp, src\stereo\taaeyes.cpp

@@ -49,7 +49,7 @@ Also recommended:
 | Film grain | 0 (it reads as noise in a headset) |
 | Display mode | **Windowed** (needed for the square VR picture and the small window; set by the installer) |
 
-**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. By default it is **Auto**: the size your headset asks for (SteamVR: its resolution setting; Virtual Desktop: its VR Graphics Quality), so every headset gets a sharp picture without changing anything. Pick a fixed size instead if the game runs too slowly; bigger is sharper but slower. While it runs, the game's window on your monitor is a small square (`desktop_window`); the headset still gets the full picture.
+**The VR picture size** - the square picture the game draws for each eye while VR runs, whatever your monitor's resolution - is set in the **VR settings panel** (the game's settings menu) or as `render_size` in `gowvr.ini`. By default it is **Auto**: the size your headset asks for (SteamVR: its resolution setting; Virtual Desktop: its VR Graphics Quality), so every headset gets a sharp picture without changing anything. Pick a fixed size instead if the game runs too slowly; bigger is sharper but slower. While it runs, the game's window on your monitor is a smaller HD window, 1280 x 720 (`desktop_window`); the headset still gets the full picture. You can resize that window by dragging its edges or corners, or maximize it: it always stays 16:9, the 3D view fills it with no black bars (the headset still shows more above and below), and the mod remembers your size for the next time. Your own window comes back when VR ends.
 
 ---
 

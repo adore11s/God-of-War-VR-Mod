@@ -200,8 +200,41 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
     g_cs.camPrev = camYaw;
     g_cs.pitchPrev = camPitch;
     const float hmdRate = fabsf(WrapPi(hmdYaw - g_cs.hmdPrev)) / dt * 57.2958f;  // deg/s of the physical head
+    // D-316 (diagnostic, a Quest 3 / Virtual Desktop player with smooth turning: "Kratos' body sometimes fails to follow
+    // the VR rotation and glitches; the interaction icon doesn't appear because his body isn't facing the interaction"):
+    // a head yaw jump of > 25 deg in one frame is a tracking glitch / runtime recenter, not a head turn
+    {
+        const float hj = WrapPi(hmdYaw - g_cs.hmdPrev) * 57.2958f;
+        static int logs = 0;
+        if (fabsf(hj) > 25.f && logs++ < 40)
+            Log("facing: HEAD YAW JUMP %.0f deg in one frame (%.1f -> %.1f deg, pitch %.0f, frame %.1f ms) - tracking glitch / "
+                "recenter? (D-316)", hj, g_cs.hmdPrev * 57.2958f, hmdYaw * 57.2958f, hmdPitch * 57.2958f, dt * 1000.f);
+    }
     g_cs.hmdPrev = hmdYaw;
     const vr::InputSnapshot in = vr::XrInput();
+    // D-316: smooth turning - the right stick pushed but the game camera (which the view and the body follow) does not
+    // turn: the turn never reaches the game (pad merge, focus, a scripted camera, lock-on)
+    {
+        static float pushedFor = 0.f, turnedDeg = 0.f;
+        static int logs = 0;
+        const float sx = in.focused && in.hand[1].active ? in.hand[1].stick[0] : 0.f;
+        if (!input::SnapMode() && fabsf(sx) > 0.5f) {
+            pushedFor += dt;
+            turnedDeg += fabsf(d) * 57.2958f;
+            if (pushedFor >= 0.5f) {
+                if (turnedDeg < 3.f && logs++ < 40)
+                    Log("facing: right stick pushed %.2f for 0.5 s but the game camera turned only %.1f deg - the turn does not "
+                        "reach the game (focused %d, body-locked %d, cinematic %d, boat %d, turn_speed %.2f) (D-316)", sx,
+                        turnedDeg, (int)in.focused, (int)fp::ContextBodyLocked(), (int)fp::InCinematic(), (int)fp::InBoat(),
+                        config::GetFloat("turn_speed", 1.f));
+                pushedFor = 0.f;
+                turnedDeg = 0.f;
+            }
+        } else {
+            pushedFor = 0.f;
+            turnedDeg = 0.f;
+        }
+    }
     // snap turning (input/turning.cpp, the VR settings panel): a push turns the view's own yaw at once - and the drawn
     // body with it - the way the stick turns the camera in smooth turning (camsync_sign); the game camera is left alone,
     // and the stick's X is not "the player turns" then (the view does not follow the camera's own swings)
@@ -296,6 +329,14 @@ float CamSyncYaw(float camYaw, float camPitch, float hmdYaw, float hmdPitch, boo
     const bool extLook = input::ExternalLookActive();
     if (g_cs.stickHeld || extLook || fabsf(d) > 0.35f) {  // the player turns (or a quick turn / cut): the view turns with it
         if (fabsf(rx) > 0.05f || extLook || (fabsf(d) > 0.35f && !traversal)) g_cs.renderYaw = WrapPi(g_cs.renderYaw + d);
+        {   // D-316: which kind of follow moved the view (a camera jump without the player's stick = a cut / game turn)
+            static int logs = 0;
+            if (fabsf(d) > 0.35f && logs++ < 60)
+                Log("facing: game camera jumped %.0f deg in one frame - the view %s (right stick %.2f, external look %d, "
+                    "traversal %d) (D-316)", d * 57.2958f,
+                    fabsf(rx) > 0.05f || extLook || !traversal ? "turned with it" : "did NOT turn with it", rx, (int)extLook,
+                    (int)traversal);
+        }
         if (fabsf(rx) > 0.5f && fabsf(d) < 0.35f) {
             g_cs.learn += d * (rx > 0.f ? 1.f : -1.f);
             if (fabsf(g_cs.learn) > 0.6f) {
@@ -468,7 +509,7 @@ float UiHeadsetFactor() {
 float UiFit(float s) { return fminf(s * UiHeadsetFactor(), 0.95f); }
 void UiScaleView(uint8_t* view) {
     if (g_uiScale < 0.f) g_uiScale = config::GetFloat("ui_scale", 0.35f);  // D-094b: 0.35 (owner; 0.75, 0.55, 0.4 were too big)
-    if (g_uiScaleFp < 0.f) g_uiScaleFp = config::GetFloat("ui_scale_fp", 0.5f);
+    if (g_uiScaleFp < 0.f) g_uiScaleFp = config::GetFloat("ui_scale_fp", 0.42f);
     ++g_uiUpdates;
     const int fpm = fp::FpMode();
     // D-103 (owner: "the bigger aiming icon also in normal, non F1 / F3"): the reticle shows only while aiming, so in
@@ -780,10 +821,15 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
         const bool video = *At<uint64_t>(kVideoHandleVa) != 0 && *At<int32_t>(kVideoClosingVa) == 0;
         if (g_lastLoading && !loading) ++g_loadsDone;  // D-271
         g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA; g_lastVideo = video;
+        // D-327 (owner: "in the shop make it a flat 2D screen floating in black"): at the shop (fp::InShop - the vendor's
+        // moves envVendor*, D-257) the same flat screen as the pause menu. gowvr.ini screen_2d_shop 0 = off
+        static const bool shopOn = config::GetFloat("screen_2d_shop", 1.f) > 0.5f;
+        const bool shop = shopOn && fp::InShop();
         const bool on = g_headCamOn &&
-                        (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded || video)));
+                        (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded || video || shop)));
         if (on != g_screen2D.load())
-            Log("ui: %s", on ? (pause ? "2D screen (pause menu): flat game camera, one kick"
+            Log("ui: %s", on ? (shop && !pause ? "2D screen (shop): flat game camera, one kick"
+                                      : pause ? "2D screen (pause menu): flat game camera, one kick"
                                       : video ? "2D screen (video playing): flat game camera, one kick"
                                       : loading ? "2D screen (loading: Kratos not posed): flat game camera, one kick"
                                       : faded ? "2D screen (screen faded out): flat game camera, one kick"
@@ -1189,12 +1235,148 @@ void SetEyePoses(bool on, const Mat4* eye0, const Mat4* eye1, bool level) {
 void CamLog(int n) { g_camLog = n; }
 
 namespace {
+// D-316 (diagnostic only, no behaviour change): a Quest 3 / Virtual Desktop player with smooth turning reports Kratos'
+// body sometimes not following the headset's turn (glitching) and interaction icons missing because his body does not
+// face the interaction. Logged, game thread, every gameplay-F1 view update:
+//  - "facing:" every 2 s (the first 400 lines, then every 10 s): head / view / game camera / game facing / drawn body
+//    yaws and their differences, the follow state, sticks, turning mode, frame time;
+//  - "facing: body lags": the drawn body > 30 deg from the view for > 0.4 s while it should follow (start + end);
+//  - "facing: follow flickers": the body-follow switched on / off >= 6 times in 2 s (and why);
+//  - "facing: standing, game facing": standing still with the game's Kratos > 50 deg from the view for > 1.5 s (the
+//    game's own facing / camera decide interaction prompts; the mod turns only the drawn body);
+//  - "facing: frame hitch" (> 100 ms) and head-pose loss (HeadcamCenter failing in F1).
+void FacingDiag(float hmdYaw, float ry, float viewYaw, float camYaw, bool gameplayFp, bool active, bool aiming,
+                const vr::InputSnapshot& in) {
+    static double lastT = 0.0;
+    const double now = Seconds();
+    const float dt = lastT > 0.0 ? (float)(now - lastT) : 0.f;
+    lastT = now;
+    if (!gameplayFp) return;
+    const float D = 57.2958f;
+    float gp[3], gameYaw = 0.f, rp[3], drawnYaw = 0.f;
+    const bool haveGame = fp::GameRoot(gp, &gameYaw), haveDrawn = fp::RenderRoot(rp, &drawnYaw);
+    const float bodyOff = haveDrawn ? WrapPi(drawnYaw - viewYaw) * D : 0.f;
+    const float gameOff = haveGame ? WrapPi(gameYaw - viewYaw) * D : 0.f;
+    const float camOff = WrapPi(camYaw - viewYaw) * D;
+    const bool locked = fp::ContextBodyLocked();
+    const bool walking = fp::HeroMoving();
+    char prim[96] = "";
+    fp::HeroPrimaryAnim(prim, sizeof(prim));
+    const char* act = fp::ActiveMoveAnim();
+    if (!act) act = "";
+    const vr::HandState& L = in.hand[0];
+    const vr::HandState& R = in.hand[1];
+    auto state = [&](char* b, size_t n) {
+        sprintf_s(b, n,
+                  "head %.0f, view %.0f (stick yaw %.0f), game camera %.0f (%+.0f), game facing %s%.0f (%+.0f), drawn body %s%.0f "
+                  "(%+.0f) | follow %d, body-locked %d, walking %d, aiming %d, boat %d, cinematic %d | turning %s speed %.2f, "
+                  "right stick %.2f %.2f (held %d), left stick %.2f %.2f, focused %d, steering pause %d, snap catch-up %.0f | "
+                  "anim %s / %s",
+                  hmdYaw * D, viewYaw * D, ry * D, camYaw * D, camOff, haveGame ? "" : "(none) ", gameYaw * D, gameOff,
+                  haveDrawn ? "" : "(none) ", drawnYaw * D, bodyOff, (int)active, (int)locked, (int)walking, (int)aiming,
+                  (int)fp::InBoat(), (int)fp::InCinematic(), input::SnapMode() ? "snap" : "smooth",
+                  config::GetFloat("turn_speed", 1.f), R.stick[0], R.stick[1], (int)g_cs.stickHeld, L.stick[0], L.stick[1],
+                  (int)in.focused, (int)(now < g_cs.pauseUntil), g_cs.alignLeft * D, prim[0] ? prim : "-", act[0] ? act : "-");
+    };
+    char b[700];
+    // periodic
+    {
+        static double at = 0.0;
+        static int lines = 0;
+        if (now - at >= (lines < 400 ? 2.0 : 10.0)) {
+            at = now;
+            ++lines;
+            state(b, sizeof(b));
+            Log("facing: %s (D-316)", b);
+        }
+    }
+    // frame hitch
+    {
+        static int logs = 0;
+        if (dt > 0.1f && dt < 5.f && logs++ < 40) Log("facing: frame hitch %.0f ms in gameplay F1 (D-316)", dt * 1000.f);
+    }
+    // body lags the head while it should follow
+    {
+        static double since = 0.0;
+        static bool lagging = false;
+        static float maxOff = 0.f;
+        static int logs = 0;
+        const bool lag = active && haveDrawn && fabsf(bodyOff) > 30.f;
+        if (lag) {
+            if (since == 0.0) since = now;
+            maxOff = fmaxf(maxOff, fabsf(bodyOff));
+            if (!lagging && now - since > 0.4) {
+                lagging = true;
+                if (logs++ < 60) { state(b, sizeof(b)); Log("facing: body lags the head %.0f deg for 0.4 s: %s (D-316)", bodyOff, b); }
+            }
+        } else {
+            if (lagging && logs < 120) {
+                ++logs;
+                Log("facing: body caught up after %.1f s (worst %.0f deg; now follow %d, drawn %+.0f) (D-316)", now - since, maxOff,
+                    (int)active, bodyOff);
+            }
+            since = 0.0;
+            lagging = false;
+            maxOff = 0.f;
+        }
+    }
+    // follow switching on / off quickly
+    {
+        static bool prev = false;
+        static int flips = 0, logs = 0;
+        static double winT = 0.0;
+        if (active != prev) {
+            prev = active;
+            if (now - winT > 2.0) { winT = now; flips = 0; }
+            if (++flips == 6 && logs++ < 30) {
+                state(b, sizeof(b));
+                Log("facing: body follow flickers on / off (6 times in %.1f s) - body-locked context changing? %s (D-316)", now - winT, b);
+            }
+        }
+    }
+    // standing still, the game's Kratos facing away from the view (interaction prompts)
+    {
+        static double since = 0.0;
+        static bool logged = false;
+        static int logs = 0;
+        const bool away = haveGame && !walking && !locked && fabsf(gameOff) > 50.f;
+        if (away) {
+            if (since == 0.0) since = now;
+            if (!logged && now - since > 1.5) {
+                logged = true;
+                if (logs++ < 40) {
+                    state(b, sizeof(b));
+                    Log("facing: standing, game facing %+.0f deg / game camera %+.0f deg from the view for 1.5 s - the game's "
+                        "prompts use its own facing / camera: %s (D-316)", gameOff, camOff, b);
+                }
+            }
+        } else {
+            since = 0.0;
+            logged = false;
+        }
+    }
+}
+
 void HeadCameraIntoViewA(uint8_t* view) {
     if (!HeadcamPrepare()) return;
     Mat4 center;
     float tx, ty;
     bool level;
-    if (!HeadcamCenter(&center, &tx, &ty, &level)) return;
+    {
+        // D-316: the head pose not available in gameplay F1 (the view / body freeze meanwhile)
+        static bool lost = false;
+        static double lostAt = 0.0;
+        static int logs = 0;
+        const bool ok = HeadcamCenter(&center, &tx, &ty, &level);
+        if (!ok && !lost && fp::FpMode() == 1) {
+            lost = true;
+            lostAt = Seconds();
+        } else if (ok && lost) {
+            lost = false;
+            if (logs++ < 40) Log("facing: head pose unavailable for %.2f s in F1 (HeadcamCenter) (D-316)", Seconds() - lostAt);
+        }
+        if (!ok) return;
+    }
     static int logged = 0;
     if (g_camLog > 0 || logged < 4) {
         const float* o = (const float*)(view + 0x150);
@@ -1244,6 +1426,7 @@ void HeadCameraIntoViewA(uint8_t* view) {
         // D-097: riding, climbing, chains, dragging, doors / chests, Atreus behind the shield ...: the body keeps the
         // game's facing instead of turning with the head (owner: "the body shouldn't move")
         fp::BodyFollowYaw(viewYaw, gameplayFp && !fp::ContextBodyLocked(), aiming);
+        FacingDiag(hmdYaw, ry, viewYaw, camYaw, gameplayFp, gameplayFp && !fp::ContextBodyLocked(), aiming, in);  // D-316
         static const bool viewB = config::GetFloat("aim_viewb", 1.f) > 0.5f;
         // gameplay first person, and third person with VR on (owner: "fix the headtracking throwing axe mechanic in 3rd
         // person"); never in cutscenes or the boat
@@ -1398,7 +1581,7 @@ float UiVerticalFix(float frameAspect) {
 
 float UiScaleCurrent() {
     const float s = g_uiScale < 0.f ? config::GetFloat("ui_scale", 0.35f) : g_uiScale;
-    const float sFp = g_uiScaleFp < 0.f ? config::GetFloat("ui_scale_fp", 0.5f) : g_uiScaleFp;
+    const float sFp = g_uiScaleFp < 0.f ? config::GetFloat("ui_scale_fp", 0.42f) : g_uiScaleFp;
     const int fpm = fp::FpMode();
     if (fp::InShop()) return UiFit(s);  // D-257: the shop's UI keeps its size (D-285: at the same angle on every headset)
     return UiFit(((fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s) * UiSizeMul());

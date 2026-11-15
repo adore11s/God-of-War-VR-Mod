@@ -21,6 +21,8 @@ bool PlayerAimInput();
 // mouse (raw input) - within the last 150 ms
 bool ExternalLookActive();
 bool GameBlockHeld();     // D-080: L1 (block / shield) in the buttons the game last received
+// D-331: a real gamepad's A (Xbox, Steam Input's virtual pad) / Cross (PlayStation) held now - the welcome windows
+bool PadConfirmHeld();
 void VpadHold(uint16_t buttons, float lx, float ly, float rx, float ry, float lt, float rt, int ms);
 uint64_t VpadPolls();
 

@@ -30,9 +30,14 @@ if(GOWVR_DEFAULT_INI)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOWVR_DEFAULT_INI}")
 endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gen/default_ini.inc" "R\"GOWVRINI(${GOWVR_INI_TEXT})GOWVRINI\"\n")
+# D-317: the VR panel's font, Montserrat (SIL Open Font License 1.1, assets/fonts/OFL.txt), built in as RCDATA 3101..3103
+set(GOWVR_FONTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gen/fonts.rc"
+  "3101 RCDATA \"${GOWVR_FONTS}/Montserrat-Bold.ttf\"\n3102 RCDATA \"${GOWVR_FONTS}/Montserrat-SemiBold.ttf\"\n3103 RCDATA \"${GOWVR_FONTS}/Montserrat-Regular.ttf\"\n")
 
 add_library(gowvr SHARED
   src/dllmain.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/gen/fonts.rc"
   src/proxy/proxy.cpp
   src/proxy/version_stubs.asm
   src/proxy/version.def
@@ -41,6 +46,7 @@ add_library(gowvr SHARED
   src/core/patch.cpp
   src/frame/d3d_hooks.cpp
   src/frame/rendersize.cpp
+  src/frame/desktopview.cpp
   src/diag/cmd.cpp
   src/diag/watch.cpp
   src/diag/crashlog.cpp
@@ -66,11 +72,13 @@ add_library(gowvr SHARED
   src/fp/combat.cpp
   src/fp/walls.cpp
   src/fp/manual.cpp
+  src/fp/prompts.cpp
   src/fp/posdiag.cpp
   src/core/config.cpp
   src/input/vrmap.cpp
   src/vr/xr.cpp
   src/vr/panel.cpp
+  src/vr/welcome_draw.cpp
   src/diag/scan.cpp
   src/diag/cbprobe.cpp
   src/diag/stackprobe.cpp
@@ -80,7 +88,7 @@ set_target_properties(gowvr PROPERTIES OUTPUT_NAME "version")
 target_include_directories(gowvr PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gen")  # default_ini.inc
 target_compile_definitions(gowvr PRIVATE GOWVR_VERSION="${GOWVR_GIT}" WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(gowvr PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
-target_link_libraries(gowvr PRIVATE d3d11 dxgi dxguid psapi bcrypt windowscodecs ole32)
+target_link_libraries(gowvr PRIVATE d3d11 dxgi dxguid psapi bcrypt windowscodecs ole32 d2d1 dwrite)  # D-318: d2d1 dwrite (the welcome windows)
 # Owner 2026-10-19 (Meta Link: "VR doesn't work at all"; the Beyond: Two Souls VR mod, which works there, links it): the
 # official OpenXR loader, static (vcpkg x64-windows-static, no extra DLL), finds and starts the runtime like every OpenXR
 # game. Without it (a build machine with no vcpkg) the runtime is loaded directly, as before.
@@ -110,3 +118,17 @@ endif()
 add_executable(addrtest EXCLUDE_FROM_ALL tools/addrtest/addrtest.cpp src/core/addr.cpp src/core/log.cpp src/core/config.cpp)
 target_compile_definitions(addrtest PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(addrtest PRIVATE /utf-8)
+
+# D-328: welcome_preview.exe - every welcome window drawn by the mod's own code (src/vr/welcome_draw.cpp + the built-in
+# fonts) saved as PNGs in docs/visuals; build target welcome_preview, run build/Release/welcome_preview.exe
+add_executable(welcome_preview EXCLUDE_FROM_ALL tools/welcome_preview/welcome_preview.cpp src/vr/welcome_draw.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/gen/fonts.rc")
+target_compile_definitions(welcome_preview PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+  GOWVR_VISUALS_DIR=L"${CMAKE_CURRENT_SOURCE_DIR}/docs/visuals")
+target_compile_options(welcome_preview PRIVATE /utf-8)
+target_link_libraries(welcome_preview PRIVATE windowscodecs ole32 d2d1 dwrite)
+
+# Local developer tools (git-ignored dev/ folder, never part of the release) - built only where the folder exists
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dev/CMakeLists.txt")
+  add_subdirectory(dev)
+endif()

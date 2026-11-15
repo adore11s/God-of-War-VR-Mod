@@ -29,4 +29,14 @@ const uint32_t* PanelCursorPixels();
 // Pad thread (vrmap): hand 0 left / 1 right points at the panel - its trigger belongs to the panel, not the game
 bool PanelCapturesTrigger(int hand);
 
+// D-318 welcome windows (WELCOME / KO-FI SUPPORTER / VR CONTROLS), once per welcome version (gowvr.ini welcome_seen):
+// render thread, every 3D (stereo) frame: ~3 s into the 3D view (not in a cutscene) the current window, following the
+// head slowly, with pointing / clicks (CONTINUE, START); false = none this frame. head / headFwd: LOCAL space.
+bool WelcomeFrame(const InputSnapshot& in, const float head[3], const float headFwd[3], PanelLayer* out);
+void WelcomeFlatFrame();  // a 2D screen frame: the window hides, the 3 s count starts again
+bool WelcomeActive();     // any thread: a welcome window is up - the controllers drive only it (mandatory)
+// D-331b, any thread: Enter belongs to the welcome window now (one is up, or Enter is still held from closing the last
+// one) - the game must not get it (input/vpad.cpp: raw input and window messages)
+bool WelcomeTakesEnter();
+
 }  // namespace gowvr::vr

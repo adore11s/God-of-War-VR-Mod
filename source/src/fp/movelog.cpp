@@ -1,6 +1,7 @@
 #include "movelog.h"
 #include "../core/addr.h"
 #include "body.h"
+#include "firstperson.h"
 #include "../core/log.h"
 #include "../core/config.h"
 #include <windows.h>
@@ -223,6 +224,19 @@ void MoveLogTick() {
             const int nb = (g_primBuf.load() + 1) & 3;
             strcpy_s(g_primAnim[nb], a);
             g_primBuf = nb;
+            // D-323e: outside gameplay F1 no context line names Kratos' animations - a long one (>= 3 s) is named
+            // when it ends, so a scene that should be F3 can be found in the owner's log
+            static char lastA[96] = {};
+            static ULONGLONG lastT = 0;
+            static bool lastOutside = false;
+            if (strcmp(a, lastA) != 0) {
+                if (lastA[0] && lastOutside && now - lastT >= 3000)
+                    Log("anim outside F1: '%s' for %.1f s", lastA, (now - lastT) / 1000.0);
+                strcpy_s(lastA, a);
+                lastT = now;
+                lastOutside = false;
+            }
+            if (FpMode() != 1) lastOutside = true;
         }
     }
     // the active move's animation name, for the F1 body rules (combat.cpp): sampled until an attack/evade name shows

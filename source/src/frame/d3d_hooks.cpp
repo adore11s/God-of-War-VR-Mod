@@ -9,6 +9,7 @@
 #include "../input/vpad.h"
 #include "../stereo/eyes.h"
 #include "rendersize.h"
+#include "desktopview.h"
 #include "../stereo/sharpui.h"
 #include "../stereo/dlsseyes.h"
 #include "../stereo/taaeyes.h"
@@ -181,6 +182,7 @@ HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) 
     VrOnPresent(sc, sync);
     diag::ShotOnPresent(sc);
     diag::CbProbeOnPresent();
+    frame::DesktopViewOnPresent(sc);  // D-329: last - after every headset copy, so it reaches only the desktop window
     return o_Present(sc, sync, flags);
 }
 
@@ -191,11 +193,13 @@ HRESULT STDMETHODCALLTYPE hk_Present1(IDXGISwapChain1* sc, UINT sync, UINT flags
     stereo::LoadWatchTick();
     VrOnPresent(sc, sync);
     diag::ShotOnPresent(sc);
+    frame::DesktopViewOnPresent(sc);  // D-329 (as in hk_Present)
     return o_Present1(sc, sync, flags, p);
 }
 
 HRESULT STDMETHODCALLTYPE hk_ResizeBuffers(IDXGISwapChain* sc, UINT count, UINT w, UINT h, DXGI_FORMAT fmt, UINT fl) {
     stereo::SharpUiOnResize();  // D-104: no view of the old backbuffer may survive the resize
+    frame::DesktopViewOnResize();  // D-329: (the same)
     HRESULT hr = o_ResizeBuffers(sc, count, w, h, fmt, fl);
     Log("ResizeBuffers(sc=%p count=%u %ux%u fmt=%d flags=0x%x) -> 0x%08lx", (void*)sc, count, w, h, (int)fmt, fl, hr);
     return hr;

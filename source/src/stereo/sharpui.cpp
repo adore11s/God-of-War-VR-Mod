@@ -1256,6 +1256,11 @@ bool HudLayerCopy(ID3D11DeviceContext* ctx, int eye) {
     return true;
 }
 
+// D-329 (owner: "ever since the sharp UI I cannot see it in the desktop window"): with the HUD layer the HUD goes to the
+// headset as its own layer and the game's picture - the one the desktop window shows - has none. Set by PasteHud when
+// that happened this frame; SharpUiDesktopHud pastes it into the desktop picture after the headset's copies.
+std::atomic<bool> g_desktopHud{false};
+
 // the aiming reticle region is moved to the shot's direction this frame (pasted into the eye image then)
 bool ReticleRegionMoved() {
     if (SharpUiReticleMode() == 2) return false;  // no circle (mutate.cpp aims through the drawn reticle)
@@ -1271,6 +1276,8 @@ void PasteHud(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const ch
     // (D-280: also while the aiming reticle region is moved - HudLayerCopy moves it inside the layer picture)
     if (!(layerOn && vr::XrRunning() && eye >= 0 && HudLayerCopy(ctx, eye)))
         Composite(ctx, target);
+    else
+        g_desktopHud = true;  // D-329: the game's picture has no HUD now - pasted into the desktop window's at Present
     g_drew = false;
     g_needClear = true;  // the next UI draw (the other eye's) starts on a clear HUD target
     const uint64_t n = ++g_substFrames;
@@ -1407,7 +1414,32 @@ void SharpUiFinish(ID3D11DeviceContext* ctx, ID3D11Texture2D* bb) {
     g_needClear = true;
 }
 
+void SharpUiDesktopHud(ID3D11DeviceContext* ctx, ID3D11Texture2D* bb) {
+    if (!g_desktopHud.exchange(false) || !ctx || !bb || !g_installed.load() || !g_uiSrv) return;
+    static const bool on = config::GetFloat("desktop_hud", 1.f) > 0.5f;
+    if (!on) return;
+    D3D11_TEXTURE2D_DESC d{};
+    bb->GetDesc(&d);
+    if (d.Width != g_uiW || d.Height != g_uiH || d.SampleDesc.Count != 1) return;  // (a resize in between)
+    if (bb != g_bbTex) {
+        g_bbTex = bb;
+        g_bbCheckRtv = nullptr;
+    }
+    if (g_bbRtvFor != g_bbTex) {
+        if (g_bbRtv) { g_bbRtv->Release(); g_bbRtv = nullptr; }
+        if (FAILED(g_dev->CreateRenderTargetView(g_bbTex, nullptr, &g_bbRtv))) g_bbRtv = nullptr;
+        g_bbRtvFor = g_bbTex;
+    }
+    if (!g_bbRtv) return;
+    Composite(ctx, g_bbRtv);  // the HUD as it was in the game's picture before the HUD layer (same scale, same reticle)
+    static uint64_t n = 0;
+    if (++n <= 2 || n % 20000 == 0)
+        Log("sharpui: HUD pasted into the desktop window's picture #%llu (the headset has it as its own layer)",
+            (unsigned long long)n);
+}
+
 void SharpUiOnResize() {
+    g_desktopHud = false;
     if (g_bbRtv) { g_bbRtv->Release(); g_bbRtv = nullptr; }
     g_bbRtvFor = nullptr;
     g_bbTex = nullptr;

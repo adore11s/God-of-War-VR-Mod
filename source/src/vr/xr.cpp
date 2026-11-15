@@ -1208,6 +1208,7 @@ uint64_t g_holdFrames = 0;
 
 // VR settings panel (panel.cpp) and its pointer dot: static images, uploaded only when they change
 EyeSwap g_panelSc, g_cursorSc;
+EyeSwap g_welcomeSc;  // D-318 the welcome windows
 EyeSwap g_hudSc[2];  // the HUD layer of each eye (sharpui.cpp SharpUiHudLayer)
 uint64_t g_hudQuads = 0;
 
@@ -1247,7 +1248,7 @@ bool EnsureRtSwapchain(EyeSwap& s, uint32_t w, uint32_t h, const char* what) {
     Log("xr: %s swapchain %ux%u", what, w, h);
     return true;
 }
-bool g_panelUploaded = false, g_cursorUploaded = false;
+bool g_panelUploaded = false, g_cursorUploaded = false, g_welcomeUploaded = false;
 
 bool EnsureStaticSwapchain(EyeSwap& s, uint32_t w, uint32_t h, const char* what) {
     if (s.sc && s.w == w && s.h == h) return true;
@@ -1372,7 +1373,8 @@ void DestroySession(const char* why, bool dropInstance) {
     dropSwap(g_hudSc[0]);
     dropSwap(g_hudSc[1]);
     dropSwap(g_cursorSc);
-    g_panelUploaded = g_cursorUploaded = false;
+    dropSwap(g_welcomeSc);
+    g_panelUploaded = g_cursorUploaded = g_welcomeUploaded = false;
     for (int k = 0; k < 2; ++k) {
         if (g_handTracker[k] && xrDestroyHandTrackerEXT) xrDestroyHandTrackerEXT(g_handTracker[k]);
         g_handTracker[k] = nullptr;
@@ -1631,7 +1633,7 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
             config::GetFloat("render_size_auto", 1.f), config::GetFloat("ui_reticle_mode", 2.f),
             config::GetFloat("finisher_third_person", 1.f), config::GetFloat("hud_layer", 1.f), config::GetFloat("sharp_ui", 1.f),
             config::GetFloat("hold_bad_poses", 1.f), config::GetFloat("dlss_fixes_auto", 1.f),
-            config::GetFloat("afr_rendering", 0.f), config::GetFloat("mono_rendering", 0.f),
+            config::GetFloat("afr_rendering", 1.f), config::GetFloat("mono_rendering", 0.f),
             config::GetFloat("hand_smoothing", 1.f), config::GetFloat("axe_weight", 0.f),
             config::GetFloat("stream_list_scale", 4.f), config::GetFloat("sync_wait_ms", 1500.f),
             config::GetFloat("afr_reproject", 2.f));
@@ -1761,6 +1763,7 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     static const bool screenOn = config::GetFloat("screen_2d", 1.f) > 0.5f;
     if (bb && screenOn) {
         stereo::SharpUiHudDiscard();  // a flat screen frame: no HUD layer may wait for the next stereo frame
+        WelcomeFlatFrame();           // D-318: the welcome window waits for the 3D view
         ++g_monoRun;
         // (only right after the stereo view: after a while on the flat screen the last stereo image is old - the
         // startup intro's first frame came back that way)
@@ -2102,7 +2105,7 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
     // and everything below stay where they are. Three quads an eye (six with the D-260 peek: 13 layers - the objective
     // move is dropped when the runtime takes fewer). gowvr.ini hud_obj_move 0 = off
     static const bool objMoveOn = config::GetFloat("hud_obj_move", 1.f) > 0.5f;
-    static const float objW = fminf(fmaxf(config::GetFloat("hud_obj_w", 0.3f), 0.05f), 0.6f);
+    static const float objW = fminf(fmaxf(config::GetFloat("hud_obj_w", 0.22f), 0.05f), 0.6f);
     static const float objH = fminf(fmaxf(config::GetFloat("hud_obj_h", 0.25f), 0.05f), 0.5f);
     static const float objRight = fminf(fmaxf(config::GetFloat("hud_obj_right", 0.07f), -0.5f), 0.5f);
     static const float objDown = fminf(fmaxf(config::GetFloat("hud_obj_down", 0.07f), -0.5f), 0.5f);
@@ -2129,7 +2132,44 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
             Log("xr: HUD compass block %s (D-306: %.2f of the HUD lower)", compassMove ? "moved down" : "where the game puts it", compassDown);
         last = (int)compassMove;
     }
-    for (int e = 0; e < 2 && ok && g_psHud; ++e) {
+    // D-318: the welcome windows (first start of this mod version; mandatory, following the head slowly) - while one is
+    // up the HUD quads give it their layers (SteamVR takes 16: projection + window + pointer)
+    XrCompositionLayerQuad welQ{XR_TYPE_COMPOSITION_LAYER_QUAD}, welCur{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    bool welcome = false, welCursor = false;
+    if (ok) {
+        AcquireSRWLockShared(&g_inputLock);
+        const InputSnapshot win = g_input;
+        ReleaseSRWLockShared(&g_inputLock);
+        const float head[3] = {0.5f * (pv[0].pose.position.x + pv[1].pose.position.x),
+                               0.5f * (pv[0].pose.position.y + pv[1].pose.position.y),
+                               0.5f * (pv[0].pose.position.z + pv[1].pose.position.z)};
+        const float fwd0[3] = {0.f, 0.f, -1.f};
+        float hf[3];
+        QRotate(&hudHeadQ.x, fwd0, hf);
+        PanelLayer wl;
+        if (WelcomeFrame(win, head, hf, &wl) && EnsureStaticSwapchain(g_welcomeSc, (uint32_t)wl.pw, (uint32_t)wl.ph, "welcome")) {
+            if ((wl.dirty || !g_welcomeUploaded) && UploadStatic(ctx, g_welcomeSc, wl.pixels, "welcome")) g_welcomeUploaded = true;
+            if (g_welcomeUploaded) {
+                welcome = true;
+                welQ = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u /*SOURCE_ALPHA, premultiplied*/,
+                                              g_space, XR_EYE_VISIBILITY_BOTH,
+                                              {g_welcomeSc.sc, {{0, 0}, {(int32_t)g_welcomeSc.w, (int32_t)g_welcomeSc.h}}, 0},
+                                              {}, {wl.w, wl.h}};
+                memcpy(&welQ.pose, &wl.pose, sizeof(welQ.pose));
+                if (wl.cursor && EnsureStaticSwapchain(g_cursorSc, 64, 64, "panel pointer")) {
+                    if (!g_cursorUploaded && UploadStatic(ctx, g_cursorSc, PanelCursorPixels(), "panel pointer")) g_cursorUploaded = true;
+                    if (g_cursorUploaded) {
+                        welCursor = true;
+                        welCur = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0x2u, g_space, XR_EYE_VISIBILITY_BOTH,
+                                                        {g_cursorSc.sc, {{0, 0}, {64, 64}}, 0}, {}, {wl.cursorSize, wl.cursorSize}};
+                        memcpy(&welCur.pose, &wl.cursorPose, sizeof(welCur.pose));
+                    }
+                }
+            }
+        }
+    }
+    if (welcome) stereo::SharpUiHudDiscard();
+    for (int e = 0; e < 2 && ok && g_psHud && !welcome; ++e) {
         ID3D11ShaderResourceView* hsrv = nullptr;
         uint32_t hw = 0, hh = 0;
         float sx = 0.f, sy = 0.f;
@@ -2229,6 +2269,10 @@ void EndFrame(ID3D11DeviceContext1* ctx, IDXGISwapChain* sc, ID3D11Texture2D* ey
         if (++g_hudQuads <= 2 || g_hudQuads % 10000 == 0)
             Log("xr: HUD layer eye %d %ux%u of %ux%u (%.2f x %.2f m at %.0f m) #%llu", e, qw, qh, hw, hh, W, H, D,
                 (unsigned long long)g_hudQuads);
+    }
+    if (welcome) {  // D-318
+        layers[nLayers++] = (const XrBaseHeader*)&welQ;
+        if (welCursor) layers[nLayers++] = (const XrBaseHeader*)&welCur;
     }
     XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO, nullptr, g_frame.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
                       nLayers, layers};

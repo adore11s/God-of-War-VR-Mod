@@ -10,6 +10,7 @@
 #include "../core/config.h"
 #include "../core/log.h"
 #include "../input/vrmap.h"
+#include "../stereo/mutate.h"
 #include "../vr/xr.h"
 #include <windows.h>
 #include <Xinput.h>
@@ -888,7 +889,9 @@ struct RowState {
     float dipWide = 0.f;      // D-308f: how wide this dip's stroke went (0 close .. 1 a wide sweep)
     float bladeSpeed = 0.f;   // D-308h: the blade middle's speed against the boat (smoothed 0.2 s)
     ULONGLONG stillSince = 0; // D-308h: the paddle held still since
-    bool stopped = false;     // D-308h: held still row_stop_still_ms - the boat stops
+    bool stopped = false;     // D-308h: held still row_stop_still_ms - the boat stops (unused since D-315)
+    V3 strokeDir{};           // D-315: this stroke's direction in the view base's frame (a reversal = a new stroke)
+    bool haveStrokeDir = false;
     bool haveLowBack[2] = {false, false};
     V3 dir{};  // the shaft's direction (smoothed)
     bool haveDir = false;
@@ -1216,147 +1219,68 @@ void RowTick(Mat4 hands[2], const bool valid[2], const Mat4& base, float dt, ULO
     const V3 blade = topP + axis * (grips + fmaxf(bladeTip - 0.2f, 0.2f));
     g_r.minBlade = fminf(g_r.minBlade, blade.y);
     g_r.maxBlade = fmaxf(g_r.maxBlade, blade.y);
-    const bool inWater = blade.y < water && Dot(blade - root, right) * (float)side > 0.15f;
+    // D-315 (owner 2026-11-14: "make manual rowing actually fun - rowing in ANY direction makes you go further with the
+    // motion controls, and whether you go right or left is the left joystick, like in the flat game"). Replaces D-308e ..
+    // D-308k's rules (pull-back-only strokes, sweep turns, the rudder, the stop): two simple systems now -
+    //  - GO (motion): the blade under the water (either side, > 0.15 m out from the boat's middle) moving through it
+    //    faster than row_stroke_speed (0.3 m/s) in ANY horizontal direction - back, forward, out, in - pushes the boat
+    //    ahead. Each stroke: row_stroke_boost (0.3) once it has gone row_stroke_min (0.10 m), then row_drive_per_m (0.6)
+    //    per metre more, times its speed (x0.5 slow .. x1.5 fast, 0.8 m/s = x1). A stroke that turns round in the water
+    //    (back then forward) is a new stroke. Push fades over row_glide_s (3 s): steady rowing = full speed, one stroke
+    //    a glide. Measured in the view base's frame (the hands' own motion - a turning boat moves nothing).
+    //  - TURN (stick): the player's left stick sideways = the boat's turn, as the flat game's stick (row_steer 1.0);
+    //    its up / down is ignored (the speed is the rowing's).
+    const bool inWater = blade.y < water && fabsf(Dot(blade - root, right)) > 0.15f;
     if (inWater && !g_r.inWater) { vr::XrHaptic(0, 0.3f, 0.04f); vr::XrHaptic(1, 0.3f, 0.04f); }  // the blade bites the water
-    // D-308e (owner: "when the paddle is in the water it should completely stop movement; make turning easy and going
-    // fast easy - probably two separate systems"). Two systems:
-    //  - GO: the blade pulled back through the water (row_stroke_min 0.12 m in one dip, faster than row_stroke_speed
-    //    0.3 m/s) = a push straight ahead, on either side, no turn: row_stroke_boost (0.5) at once, 0.6 / m more up to
-    //    row_stroke_extra (0.25) while pulling on; it glides out over row_glide_s (3 s). A strong buzz on each push.
-    //  - STOP + TURN: the blade held in the water without pulling back (still, or drifting forward) for row_brake_ms
-    //    (200 - the catch and the end of a stroke are shorter, they never brake) = the boat stops (the push fades in
-    //    row_brake_s 0.25 s) [D-308h: the stop is now the paddle held still 4 s, below] and after row_pivot_ms (350)
-    //    turns TOWARD the paddle's side on the spot
-    //    at row_pivot (0.6) for as long as the blade stays planted (a light buzz meanwhile); lift the blade out and it
-    //    goes straight again. Y picks the side: plant on the right to turn right, on the left to turn left.
-    //  The recovery (bringing the blade forward out of the water) costs nothing; the left stick does nothing.
-    // D-308f (owner: "in real life, the further away from the body you swing the more you turn, and a swing close to the
-    // body just goes fast forward, no?" - yes: the turn is the stroke's force times its lever, the blade's distance from
-    // the boat's centre line): a pull close to the boat (row_sweep_near_m, 0.5 m out) is straight ahead; the further out
-    // the blade works the more it turns the boat AWAY from the paddle's side and the less it pushes forward - fully out
-    // (row_sweep_wide_m, 1.1 m) a stroke turns row_sweep_turn (0.5) at once plus row_sweep_per_m (0.8) per metre pulled on
-    // and keeps 40 % of the push. The turn fades in row_turn_s (1.0 s). D-308g: see the pull below (near = forward with a
-    // tiny turn, 0.7 m; the sweep's turn eases in to 1.2 m)
-    static const float minV = Cfg("row_stroke_speed", 0.3f), strokeMin = Cfg("row_stroke_min", 0.12f),
-                       boost = Cfg("row_stroke_boost", 0.5f), kDrive = Cfg("row_drive_per_m", 0.6f),
-                       extraMax = Cfg("row_stroke_extra", 0.25f), pivot = Cfg("row_pivot", 0.6f),
-                       brakeS = fmaxf(Cfg("row_brake_s", 0.25f), 0.05f), nearM = Cfg("row_sweep_near_m", 0.7f),
-                       wideM = Cfg("row_sweep_wide_m", 1.2f), sweepTurn = Cfg("row_sweep_turn", 0.5f),
-                       sweepPerM = Cfg("row_sweep_per_m", 0.8f), tauTurn = fmaxf(Cfg("row_turn_s", 1.0f), 0.1f),
-                       closeTurn = Cfg("row_close_turn", 0.05f), closePerM = Cfg("row_close_per_m", 0.05f);
-    static const ULONGLONG pivotMs = (ULONGLONG)fmaxf(Cfg("row_pivot_ms", 350.f), 0.f),
-                           stopMs = (ULONGLONG)fmaxf(Cfg("row_stop_still_ms", 3000.f), 0.f),
-                           stopPlantedMs = (ULONGLONG)fmaxf(Cfg("row_stop_planted_ms", 3000.f), 0.f);
-    static const float sweepSlow = fminf(fmaxf(Cfg("row_sweep_slow", 0.5f), 0.f), 1.f);
-    static const float stillV = Cfg("row_still_speed", 0.25f);
-    float vf = 0.f;
-    bool pulling = false;
-    if (g_r.haveLast && dt > 1e-4f) {
-        const V3 v = ((blade - g_r.lastBlade) - (basePos - g_r.lastBase)) * (1.f / dt);  // against the boat
-        vf = Dot(v, fwd);
-        // D-308h: the hands' own motion only - measured in the view base's frame, which turns with the boat (a turning
-        // boat swings the 1.5 m paddle through the world while the hands hold still)
-        const V3 bl = ToLocal(blade, AffineInverse(base));
-        g_r.bladeSpeed += (Len(bl - g_r.lastBladeLocal) / dt - g_r.bladeSpeed) * (1.f - expf(-dt / 0.2f));
-        pulling = inWater && vf < -minV;
-        if (pulling) {
-            const float d = fminf(-vf * dt, 0.1f);  // metres of stroke this frame (a lever jump is not a stroke)
-            // D-308f: how far out the blade works (0 alongside the boat .. 1 a wide sweep)
-            const float lat = fabsf(Dot(blade - root, right));
-            const float wide = fminf(fmaxf((lat - nearM) / fmaxf(wideM - nearM, 0.05f), 0.f), 1.f);
-            // D-308g (owner: "a stroke near the boat just goes forward with a tiny tiny bit of turn (by the side you row
-            // on); further out of the boat it turns the boat"; owner log, 36 strokes: close 0.23 - 0.58 m out, middle
-            // 0.64 - 0.96 m (these piled up turns of 0.5 - 0.75), wide 1.0 - 1.61 m): up to row_sweep_near_m 0.7 m (was
-            // 0.5) a stroke is a full push with only row_close_turn 0.05 (+ row_close_per_m 0.05 / m) away from the
-            // paddle's side; beyond, the turn eases in (smoothstep: 0.8 m ~0.10, 0.9 m ~0.21, 1.0 m ~0.34) to the full
-            // sweep at row_sweep_wide_m 1.2 m (was 1.1)
-            const float sweep = wide * wide * (3.f - 2.f * wide);
-            const float strokeTurn = closeTurn + (sweepTurn - closeTurn) * sweep;
-            const float turnPerM = closePerM + (sweepPerM - closePerM) * sweep;
-            // D-308i (owner: "a swing far away from the boat shouldn't go fast"; owner log: wide sweeps 1.1 - 1.3 m out
-            // still showed push 0.9 - 1.0 - each added 40 % of a push on top of the glide): a sweep adds less push the
-            // further out (none at row_sweep_wide_m) and takes row_sweep_slow (half) of the boat's speed at a full sweep
-            const float fwdShare = 1.f - sweep;
-            g_r.dipBack += d;
-            g_r.dipWide = fmaxf(g_r.dipWide, wide);
+    static const float minV = Cfg("row_stroke_speed", 0.3f), strokeMin = Cfg("row_stroke_min", 0.10f),
+                       boost = Cfg("row_stroke_boost", 0.3f), kDrive = Cfg("row_drive_per_m", 0.6f),
+                       steer = Cfg("row_steer", 1.0f);
+    const V3 bladeLocal = ToLocal(blade, AffineInverse(base));
+    if (g_r.haveLast && dt > 1e-4f && inWater) {
+        V3 dl = bladeLocal - g_r.lastBladeLocal;
+        dl.y = 0.f;  // horizontal only: dipping in / lifting out is not a stroke
+        const float step = fminf(Len(dl), 0.1f);  // a lever jump is not a stroke
+        const float v = step / dt;
+        g_r.bladeSpeed += (v - g_r.bladeSpeed) * (1.f - expf(-dt / 0.2f));
+        if (v > minV && step > 1e-4f) {
+            const V3 dir = dl * (1.f / Len(dl));
+            if (g_r.haveStrokeDir && Dot(dir, g_r.strokeDir) < -0.3f) { g_r.dipBack = 0.f; g_r.dipBoosted = false; }
+            g_r.strokeDir = dir;
+            g_r.haveStrokeDir = true;
+            g_r.dipBack += step;
+            const float speedK = fminf(fmaxf(v / 0.8f, 0.5f), 1.5f);
             if (!g_r.dipBoosted && g_r.dipBack >= strokeMin) {
                 g_r.dipBoosted = true;
-                g_r.drive = g_r.drive * (1.f - sweepSlow * sweep) + boost * fwdShare;  // D-308i
-                g_r.turn -= (float)side * strokeTurn;  // away from the paddle's side
+                g_r.drive += boost;
                 ++g_r.strokes;
                 vr::XrHaptic(0, 0.8f, 0.08f);
                 vr::XrHaptic(1, 0.8f, 0.08f);
                 static int logs = 0;
                 if (logs++ < 60)
-                    Log("manual row: stroke on the %s, blade %.2f m out (%s) -> push %.2f turn %.2f (water %.2f, blade %.2f)",
-                        side > 0 ? "right" : "left", lat, lat <= nearM ? "close: forward, tiny turn" : wide > 0.8f ? "wide sweep" : "half sweep",
-                        Clamp1(g_r.drive), Clamp1(g_r.turn), water, blade.y);
+                    Log("manual row: stroke on the %s (%.1f m/s) -> push %.2f (water %.2f, blade %.2f)", side > 0 ? "right" : "left", v,
+                        fminf(g_r.drive, 1.f), water, blade.y);
             } else if (g_r.dipBoosted) {
-                if (g_r.dipBack < strokeMin + extraMax / fmaxf(kDrive, 0.01f)) g_r.drive += kDrive * d * fwdShare;
-                g_r.turn -= (float)side * turnPerM * d;  // a long sweep keeps turning
+                g_r.drive += kDrive * step * speedK;
             }
-            const float amp = fminf(fmaxf(-vf * 0.35f, 0.2f), 0.9f);  // feel the water's resistance
+            const float amp = fminf(fmaxf(v * 0.35f, 0.2f), 0.9f);  // feel the water's resistance
             vr::XrHaptic(0, amp, 0.03f);
             vr::XrHaptic(1, amp, 0.03f);
         }
     }
-    if (!inWater) { g_r.dipBack = 0.f; g_r.dipBoosted = false; g_r.dipWide = 0.f; }
-    // D-308h (owner: "rowing should stop the boat when you hold the paddle still for 4 seconds at least"; owner log: the
-    // blade resting in the water between strokes braked the boat after 200 ms - "held in the water - stopping" dozens of
-    // times a minute): the STOP is now the paddle held still - the blade's middle slower than row_still_speed (0.25 m/s)
-    // against the boat, smoothed 0.2 s, in or out of the water - for row_stop_still_ms (4000): the push and the turn then
-    // fade out (row_brake_s 0.25 s) until the paddle moves again. A blade resting in the water no longer brakes; held in
-    // the water (not pulling) for row_pivot_ms (350) it still steers toward its side, as a rudder, while the boat moves
-    // D-308i (owner: "fully stop when holding it there 3 seconds"; owner log, D-308h build: "held still" never came -
-    // the boat was never stopped): the boat stops fully - push and turn - when the blade is held in the water without
-    // pulling for row_stop_planted_ms (3000), or the paddle held still anywhere for row_stop_still_ms (3000)
-    {
-        const bool still = g_r.haveLast && g_r.bladeSpeed < stillV;
-        if (!still) g_r.stillSince = 0;
-        else if (!g_r.stillSince) g_r.stillSince = now;
-        const bool planted = inWater && !pulling;
-        if (!planted) g_r.rudderSince = 0;
-        else if (!g_r.rudderSince) g_r.rudderSince = now;
-        // D-308k (owner: "make the stopping of rowing when holding the paddle gone - I don't want that mechanic"): off
-        // unless gowvr.ini row_stop 1
-        static const bool stopOn = Cfg("row_stop", 0.f) > 0.5f;
-        const bool stopped = stopOn && ((still && now - g_r.stillSince >= stopMs) || (planted && now - g_r.rudderSince >= stopPlantedMs));
-        if (stopped != g_r.stopped) {
-            g_r.stopped = stopped;
-            static int logs = 0;
-            if (logs++ < 60)
-                Log("manual row: %s", stopped ? (planted ? "paddle held in the water 3 s - the boat stops" : "paddle held still 3 s - the boat stops")
-                                              : "paddle moving again");
-            if (stopped) { vr::XrHaptic(0, 0.3f, 0.05f); vr::XrHaptic(1, 0.3f, 0.05f); }
-        }
-        const bool pivoting = planted && !stopped && now - g_r.rudderSince >= pivotMs;
-        if (stopped) {
-            g_r.drive *= expf(-dt / brakeS);
-            g_r.turn *= expf(-dt / brakeS);
-            if (g_r.drive < 0.02f) g_r.drive = 0.f;  // fully
-            if (fabsf(g_r.turn) < 0.02f) g_r.turn = 0.f;
-        } else if (pivoting) {
-            g_r.turn += ((float)side * pivot - g_r.turn) * (1.f - expf(-dt / 0.15f));
-            static ULONGLONG buzzAt = 0;
-            if (now - buzzAt >= 120) { buzzAt = now; vr::XrHaptic(side > 0 ? 1 : 0, 0.15f, 0.03f); }
-        } else {
-            g_r.turn *= expf(-dt / tauTurn);  // D-308f: a sweep's turn fades in row_turn_s
-        }
-        if (pivoting != g_r.ruddering) {
-            g_r.ruddering = pivoting;
-            static int logs = 0;
-            if (logs++ < 60) Log("manual row: paddle %s on the %s%s", pivoting ? "held in the water" : "lifted / pulling / still",
-                                 side > 0 ? "right" : "left", pivoting ? " - steering that way (rudder)" : "");
-        }
-    }
+    if (!inWater) { g_r.dipBack = 0.f; g_r.dipBoosted = false; g_r.haveStrokeDir = false; }
     g_r.inWater = inWater;
     g_r.lastBlade = blade;
-    g_r.lastBladeLocal = ToLocal(blade, AffineInverse(base));
+    g_r.lastBladeLocal = bladeLocal;
     g_r.lastBase = basePos;
     g_r.haveLast = true;
     static const float tauDrive = fmaxf(Cfg("row_glide_s", 3.0f), 0.1f);
     g_r.drive = fminf(fmaxf(g_r.drive, 0.f), 1.f) * expf(-dt / tauDrive);
-    g_r.turn = Clamp1(g_r.turn);
+    if (g_r.drive < 0.01f) g_r.drive = 0.f;
+    // the player's left stick sideways (pad thread), past a 0.15 dead zone, rescaled to 0..1
+    {
+        const float sx = g_padStick[0].load();
+        g_r.turn = fabsf(sx) < 0.15f ? 0.f : Clamp1((sx - copysignf(0.15f, sx)) / 0.85f * steer);
+    }
     // the boat's stick: wanted direction in the world through the game camera's frame (D-064: the stick is read in the
     // camera's frame; with the boat's camera behind the boat this is forward / sideways)
     const V3 want = fwd * g_r.drive + right * g_r.turn;
@@ -1364,7 +1288,7 @@ void RowTick(Mat4 hands[2], const bool valid[2], const Mat4& base, float dt, ULO
     const V3 camR{cosf(cy), 0.f, -sinf(cy)}, camF{-sinf(cy), 0.f, -cosf(cy)};
     float x = Dot(want, camR), y = Dot(want, camF);
     const float m = sqrtf(x * x + y * y);
-    static const float rowMax = fminf(fmaxf(Cfg("row_max", 0.85f), 0.1f), 1.f);
+    static const float rowMax = fminf(fmaxf(Cfg("row_max", 1.0f), 0.1f), 1.f);  // D-315: 1.0 (was 0.85)
     if (m > rowMax) { x *= rowMax / m; y *= rowMax / m; }
     if (m < 0.05f) x = y = 0.f;
     g_rowX = x;
@@ -1465,6 +1389,10 @@ void ManualPad(const vr::InputSnapshot& s, XINPUT_GAMEPAD* g) {
     g_padStick[1] = L.active ? L.stick[1] : 0.f;
 
     if (now < g_entryPulseUntil.load()) g->wButtons |= XINPUT_GAMEPAD_A;
+    // D-314 (owner: "during manual rowing I can't press R1 in the menu"): a menu / 2D screen keeps the game thread's last
+    // climbing / rowing state (ManualIdle comes only from the gameplay view), so the R1 / L1 strip, the boat's stick and
+    // the swallowed Y went on in the menu. On a 2D screen the pad is the plain mapping's alone
+    if (stereo::Screen2DFrame()) return;
     if (g_climbActive.load()) {
         g->wButtons &= (WORD)~(XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER);  // the grips hold on, no R1 / L1
         if (!phys) {
@@ -1486,8 +1414,8 @@ void ManualPad(const vr::InputSnapshot& s, XINPUT_GAMEPAD* g) {
         g->wButtons &= (WORD)~XINPUT_GAMEPAD_Y;
         if (g_rowActive.load()) {
             g->wButtons &= (WORD)~(XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER);  // the grips hold the paddle
-            // D-308d (owner: "make it so joystick movements don't work during manual rowing - not for climbing"): the
-            // boat's stick is the rowing's alone, the player's left stick is ignored
+            // D-308d: the boat's stick is the rowing's; D-315: the player's left stick sideways is in it as the boat's
+            // turn (RowTick reads g_padStick), its up / down is not
             {
                 g->sThumbLX = AxisS(g_rowX.load());
                 g->sThumbLY = AxisS(g_rowY.load());

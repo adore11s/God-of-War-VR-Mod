@@ -72,6 +72,7 @@ bool g_eye0ThisFrame = false;
 // D-108: which eye's command streams the render thread is executing (eye 0's run first, then eye 1's, then Present):
 // 0 from Present until eye 0's last stream has executed, then 1; -1 with the eyes off
 std::atomic<int> g_renderEye{-1};
+std::atomic<int> g_presentEye{-1};  // D-329d: the eye this Present's backbuffer holds in AFR (-1 = unknown / not AFR)
 
 // Eye screenshot hand-off (render thread -> command thread).
 std::mutex g_shotMu;
@@ -269,6 +270,7 @@ void EyesSteal() {
 void EyesOnPresent(IDXGISwapChain* sc) {
     g_sc = sc;
     g_pairThisFrame = false;
+    g_presentEye = -1;
     struct NextFrameEye0 { ~NextFrameEye0() { g_renderEye = g_on.load() ? 0 : -1; } } nextEye;  // D-108
     if (!g_on.load()) {
         g_eye0ThisFrame = false;
@@ -280,6 +282,7 @@ void EyesOnPresent(IDXGISwapChain* sc) {
         AfrEntry e;
         if (!AfrFront(&e, true)) { ++g_afrMissing; return; }
         if (!CaptureEye(sc, e.eye)) return;
+        if (!g_mono.load()) g_presentEye = e.eye;  // D-329d
         ++(e.eye ? g_eye1Caps : g_eye0Caps);
         g_afrEyeViews[e.eye] = e.v;
         g_afrHave[e.eye] = e.v.valid;
@@ -374,6 +377,7 @@ void EyesAfrKick(int eye) {
 }
 bool EyesAfrOn() { return g_afr.load(std::memory_order_relaxed); }
 bool EyesMonoOn() { return g_mono.load(std::memory_order_relaxed); }
+int EyesPresentEye() { return g_presentEye.load(std::memory_order_relaxed); }
 int EyesRenderEye() { return g_renderEye.load(std::memory_order_relaxed); }
 
 void EyesSetFrameViews(const vr::EyeViews& v) { g_frameViews = v; }

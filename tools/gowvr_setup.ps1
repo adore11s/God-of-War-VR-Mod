@@ -1,9 +1,11 @@
 # ===========================================================================
 #  GOD OF WAR - VR MOD : installer / uninstaller
 #
-#  Called by the two .cmd files in the GOW_VR_MOD folder:
+#  Called by the .cmd files in the GOW_VR_MOD folder:
 #    "Install VR mod.cmd"    ->  -Mode Install    (once: version.dll next to GoW.exe)
 #    "Uninstall VR mod.cmd"  ->  -Mode Uninstall  (the mod's own files to the Recycle Bin)
+#    "Copy my save.cmd"      ->  -Mode Save       (a COPY of the player's saves as a zip on the Desktop, to attach to a
+#                                                  bug report; the saves themselves are only read, never changed)
 #
 #  The mod is a single file, version.dll, next to GoW.exe. Windows loads it into the game whichever way the game
 #  is started (Steam, Epic, GOG, the exe) - nothing is injected and no game file is replaced or patched on disk. The
@@ -16,7 +18,7 @@
 #
 #  Kept ASCII only: Windows PowerShell 5.1 reads a script without a BOM in the ANSI code page.
 # ===========================================================================
-param([ValidateSet('Install', 'Uninstall')][string]$Mode = 'Install')
+param([ValidateSet('Install', 'Uninstall', 'Save')][string]$Mode = 'Install')
 
 $ErrorActionPreference = 'Stop'
 $ModDir = Split-Path -Parent $PSScriptRoot
@@ -26,12 +28,48 @@ $StateSettings = Join-Path $ModDir 'settings_changed.txt' # settings.ini values 
 # the values that older launcher set (put back by the uninstaller only while they are still these)
 $Wanted = [ordered]@{ 'FPSLimit' = 'Off'; 'MotionBlur' = '0'; 'HDR' = 'Off' }
 
+# Owner 2026-11-15: as few key presses as possible. Choices take ONE key (no Enter); the window closes by itself after a
+# clean run; it waits for a key only when there is something the player must read (a warning, an error, settings to
+# set by hand).
+$script:NeedRead = $false
 function Say([string]$t) { Write-Host "   $t" }
-function Warn([string]$t) { Write-Host "   [!] $t" -ForegroundColor Yellow }
-function Bad([string]$t) { Write-Host "   [X] $t" -ForegroundColor Red }
+function Warn([string]$t) { $script:NeedRead = $true; Write-Host "   [!] $t" -ForegroundColor Yellow }
+function Bad([string]$t) { $script:NeedRead = $true; Write-Host "   [X] $t" -ForegroundColor Red }
+
+# One key from $allowed (upper case), shown after the prompt. Other keys are ignored. Without a console (redirected
+# input) it falls back to a typed answer + Enter.
+function Read-Key([string]$prompt, [string[]]$allowed) {
+    Write-Host "   $prompt " -NoNewline
+    try {
+        while ($true) {
+            $c = ([string]([Console]::ReadKey($true).KeyChar)).ToUpper()
+            if ($allowed -contains $c) { Write-Host $c; return $c }
+        }
+    } catch {
+        while ($true) {
+            $c = ([string](Read-Host)).Trim().ToUpper()
+            if ($c.Length -gt 0 -and $allowed -contains $c.Substring(0, 1)) { return $c.Substring(0, 1) }
+        }
+    }
+}
+
 function Done([int]$code) {
     Write-Host ''
-    [void](Read-Host '   Press Enter to close')
+    if ($code -ne 0 -or $script:NeedRead) {
+        Write-Host '   Press any key to close'
+        try { [void][Console]::ReadKey($true) } catch { [void](Read-Host) }
+        exit $code
+    }
+    try {
+        for ($s = 10; $s -gt 0; $s--) {
+            Write-Host "`r   Closing in $s s - press any key to close now " -NoNewline
+            for ($i = 0; $i -lt 10; $i++) {
+                if ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); Write-Host ''; exit $code }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        Write-Host ''
+    } catch { Start-Sleep -Seconds 10 }
     exit $code
 }
 
@@ -189,17 +227,19 @@ function Restore-Settings([string]$game) {
     $rec = Read-Recorded
     if ($rec.Count -eq 0 -or -not (Test-Path -LiteralPath $ini)) { return }
     $data = Read-Ini $ini
+    $back = @()
     foreach ($k in $rec.Keys) {
         $orig, $set = Split-Recorded $k $rec[$k]
         $cur = Get-IniValue $data.Lines $k
         if ($null -ne $cur -and $null -ne $set -and $cur -eq $set) {  # still what the mod's setup set
             $lines = $data.Lines
             [void](Set-IniValue ([ref]$lines) $k $orig)
-            Say "settings.ini: $k back to $orig"
+            $back += "$k $orig"
         } else {
             Say "settings.ini: $k left at $cur (changed by you since)"
         }
     }
+    if ($back.Count -gt 0) { Say ('Game settings put back as they were: ' + ($back -join ', ')) }  # (one line, owner 2026-11-15)
     Write-Ini $ini $data
     [void](Send-ToRecycleBin ($ini + '.vrmod-backup') $game)
     [void](Send-ToRecycleBin $StateSettings $game)
@@ -223,24 +263,13 @@ function Set-VrGameSettings([string]$game) {
     } catch { }
     if ($nvidia) { Say 'An NVIDIA graphics card was found - DLSS is recommended.' }
     else { Say 'No NVIDIA graphics card was found - DLSS needs one (NVIDIA RTX).' }
-    $dlss = $null
-    for ($try = 0; $try -lt 3 -and $null -eq $dlss; $try++) {
-        $a = (Read-Host '   Are you going to use DLSS? Type Y or N and press Enter').Trim()
-        if ($a -match '^(y|yes)$') { $dlss = $true } elseif ($a -match '^(n|no)$') { $dlss = $false }
-    }
-    if ($null -eq $dlss) { $dlss = $nvidia; Say "No answer - DLSS $(if ($dlss) { 'on' } else { 'off' })." }
+    $dlss = (Read-Key 'Are you going to use DLSS? Press Y or N:' @('Y', 'N')) -eq 'Y'
     $preset = 'Off'
     $presetName = 'off'
     if ($dlss) {
         $names = @{ '1' = @('UltraPerformance', 'Ultra Performance'); '2' = @('Performance', 'Performance');
                     '3' = @('Balanced', 'Balanced'); '4' = @('Quality', 'Quality') }
-        Say 'Which DLSS preset?  1 = Ultra Performance   2 = Performance   3 = Balanced   4 = Quality'
-        $pick = $null
-        for ($try = 0; $try -lt 3 -and $null -eq $pick; $try++) {
-            $a = (Read-Host '   Type 1, 2, 3 or 4 and press Enter').Trim()
-            if ($names.ContainsKey($a)) { $pick = $a }
-        }
-        if ($null -eq $pick) { $pick = '4'; Say 'No answer - Quality.' }
+        $pick = Read-Key 'Which DLSS preset? 1 = Ultra Performance  2 = Performance  3 = Balanced  4 = Quality:' @('1', '2', '3', '4')
         $preset = $names[$pick][0]
         $presetName = $names[$pick][1]
     }
@@ -248,15 +277,20 @@ function Set-VrGameSettings([string]$game) {
                         'DLSSQuality' = $preset }
     if ($dlss) { $want['FSRQuality'] = 'Off' }  # (DLSS and FSR are one choice in the game)
     $manual['DLSSQuality'] = $(if ($dlss) { "DLSS: $presetName" } else { 'DLSS: Off' })
-    # owner 2026-10-21: with NVIDIA (DLSS chosen) also NVIDIA Reflex Low Latency On + Boost, latency markers and latency
-    # flash on (settings.ini LatencyEnable / LatencyBoost / LatencyMarkers / LatencyFlash)
+    # owner 2026-10-21: with NVIDIA (DLSS chosen) also NVIDIA Reflex Low Latency On + Boost and latency markers
+    # (settings.ini LatencyEnable / LatencyBoost / LatencyMarkers). Owner 2026-11-15: NOT latency flash any more (a white
+    # square flashing on screen for latency-measuring hardware) - an older install's LatencyFlash=On is put back below
     if ($dlss) {
-        $want['LatencyEnable'] = 'On'; $want['LatencyBoost'] = 'On'; $want['LatencyMarkers'] = 'On'; $want['LatencyFlash'] = 'On'
+        $want['LatencyEnable'] = 'On'; $want['LatencyBoost'] = 'On'; $want['LatencyMarkers'] = 'On'
         $manual['LatencyEnable'] = 'NVIDIA Reflex Low Latency: On'
         $manual['LatencyBoost'] = 'NVIDIA Reflex Low Latency: On + Boost'
         $manual['LatencyMarkers'] = 'Latency markers: On'
-        $manual['LatencyFlash'] = 'Latency flash: On'
     }
+    # the short words for the one summary line
+    $short = [ordered]@{ 'DisplayMode' = 'Windowed'; 'Vsync' = 'VSync off'; 'FPSLimit' = 'frame limit off';
+                         'MotionBlur' = 'motion blur 0'; 'HDR' = 'HDR off'
+                         'DLSSQuality' = $(if ($dlss) { "DLSS $presetName" } else { 'DLSS off' }); 'FSRQuality' = 'FSR off'
+                         'LatencyEnable' = 'NVIDIA Reflex On'; 'LatencyBoost' = '+ Boost'; 'LatencyMarkers' = 'latency markers on' }
 
     $ini = Join-Path $game 'settings.ini'
     $failed = @()
@@ -270,6 +304,12 @@ function Set-VrGameSettings([string]$game) {
             $data = Read-Ini $ini
             $rec = Read-Recorded
             $lines = $data.Lines
+            # an older install turned latency flash on: back to the player's own value while it is still what it set
+            if ($rec.Contains('LatencyFlash')) {
+                $orig, $set = Split-Recorded 'LatencyFlash' $rec['LatencyFlash']
+                if ($null -ne $set -and (Get-IniValue $lines 'LatencyFlash') -eq $set) { [void](Set-IniValue ([ref]$lines) 'LatencyFlash' $orig) }
+                $rec.Remove('LatencyFlash')
+            }
             foreach ($k in $want.Keys) {
                 $old = Set-IniValue ([ref]$lines) $k $want[$k]
                 if ($null -eq $old) { $failed += $k; continue }
@@ -293,7 +333,10 @@ function Set-VrGameSettings([string]$game) {
         }
     }
     $done = @($want.Keys | Where-Object { $failed -notcontains $_ })
-    foreach ($k in $done) { Say "settings.ini: $($manual[$k])" }
+    if ($done.Count -gt 0) {
+        $parts = @($short.Keys | Where-Object { $done -contains $_ } | ForEach-Object { $short[$_] })
+        Say ('Game settings set for VR: ' + (($parts -join ', ') -replace ', \+ Boost', ' + Boost'))
+    }
     if ($failed.Count -gt 0) {
         Write-Host ''
         Warn 'These game settings could NOT be changed by the installer.'
@@ -302,25 +345,33 @@ function Set-VrGameSettings([string]$game) {
     }
 }
 
-# ---- the mod's own starting choices (owner 2026-10-21) -----------------------------------------------------------
-# First person while walking on, first person in cutscenes off, finishers in third person. A new gowvr.ini (written by
-# the mod on its first start) has them already. An existing one (an older version wrote finisher_third_person=0 into
-# it) gets them ONCE: the key installer_defaults marks that it was done - from then on the player's own changes stay.
+# ---- the mod's own starting choices (owner 2026-10-21; AFR owner 2026-11-15) -------------------------------------
+# First person while walking on, first person in cutscenes off, finishers in third person, AFR rendering. A new
+# gowvr.ini (written by the mod on its first start) has them already. An existing one gets them ONCE per defaults
+# version: the key installer_defaults (now 2 - AFR added) marks that it was done - from then on the player's own
+# changes stay (an install that already had 1 gets only what version 2 added: AFR).
+$DefaultsVersion = 2
 function Set-VrModDefaults([string]$game) {
     $ini = Join-Path $game 'gowvr.ini'
+    $what = 'first person while walking on, in cutscenes off, finishers in third person, AFR rendering'
     if (-not (Test-Path -LiteralPath $ini)) {
-        Say 'VR settings: first person while walking on, in cutscenes off, finishers in third person (on the first start)'
+        Say "VR settings: $what"
         return
     }
     try {
         $lines = [System.Collections.Generic.List[string]]([System.IO.File]::ReadAllLines($ini))
+        $have = 0
         foreach ($l in $lines) {
-            if ($l -match '^\s*installer_defaults\s*=\s*([0-9.]+)' -and [double]$Matches[1] -ge 1) {
-                Say 'VR settings: your first-person and finisher choices kept'
-                return
-            }
+            if ($l -match '^\s*installer_defaults\s*=\s*([0-9.]+)') { $have = [double]$Matches[1] }
         }
-        $want = [ordered]@{ 'first_person_walking' = '1'; 'first_person_cutscenes' = '0'; 'finisher_third_person' = '1' }
+        if ($have -ge $DefaultsVersion) {
+            Say 'VR settings: your own choices kept'
+            return
+        }
+        $want = [ordered]@{ 'afr_rendering' = '1' }
+        if ($have -lt 1) {
+            $want['first_person_walking'] = '1'; $want['first_person_cutscenes'] = '0'; $want['finisher_third_person'] = '1'
+        }
         foreach ($k in $want.Keys) {
             $found = $false
             for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -328,10 +379,14 @@ function Set-VrModDefaults([string]$game) {
             }
             if (-not $found) { $lines.Add("$k=$($want[$k])") }
         }
-        $lines.Add('# Set once by the installer (first person while walking on, in cutscenes off, finishers in third person) - your own changes are kept.')
-        $lines.Add('installer_defaults=1')
+        # (one marker line: the older one and its comment replaced)
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            if ($lines[$i] -match '^\s*installer_defaults\s*=' -or $lines[$i] -match '^# Set once by the installer') { $lines.RemoveAt($i) }
+        }
+        $lines.Add("# Set once by the installer ($what) - your own changes are kept.")
+        $lines.Add("installer_defaults=$DefaultsVersion")
         [System.IO.File]::WriteAllLines($ini, $lines, (New-Object System.Text.UTF8Encoding $false))
-        Say 'VR settings: first person while walking on, in cutscenes off, finishers in third person'
+        if ($have -ge 1) { Say 'VR settings: AFR rendering on (your other choices kept)' } else { Say "VR settings: $what" }
     } catch {
         Warn "The VR settings (gowvr.ini) could not be changed ($($_.Exception.Message))."
     }
@@ -372,9 +427,7 @@ if ($Mode -eq 'Install') {
     Set-VrModDefaults $game
 
     Write-Host ''
-    Say 'Done. From now on just start God of War as usual (Steam, Epic, GOG or GoW.exe)'
-    Say 'with your headset on - VR starts by itself. You never need to run this again'
-    Say '(only after downloading a new version of the mod).'
+    Say 'Done. From now on just start God of War as usual with your headset on - VR starts by itself.'
     Say 'Uninstall any time with "Uninstall VR mod.cmd" in this folder.'
     Done 0
 }
@@ -384,6 +437,8 @@ if ($Mode -eq 'Uninstall') {
     $game = Find-GameDir
     if (-not $game) { Bad 'No God of War folder found - nothing was changed.'; Done 1 }
     Say "Game folder: $game"
+    # (before the question: never make the player confirm and only then say the game must be closed)
+    if (Test-GoWRunning) { Warn 'God of War is running - close it first, then run this again.'; Done 1 }
     Write-Host ''
     Say 'This will move to the Recycle Bin (nothing is deleted for good):'
     Say '  - version.dll (the mod) from the game folder'
@@ -405,8 +460,8 @@ if ($Mode -eq 'Uninstall') {
 
     Restore-Settings $game
 
-    $k = Read-Host '   Also move gowvr.ini (your VR settings) and the gowvr_logs folder to the Recycle Bin? Type Y'
-    if ($k -eq 'Y' -or $k -eq 'y') {
+    $k = Read-Key 'Also move gowvr.ini (your VR settings) and the gowvr_logs folder to the Recycle Bin? Press Y or N:' @('Y', 'N')
+    if ($k -eq 'Y') {
         foreach ($f in @('gowvr.ini', 'gowvr.ini.tmp', 'gowvr_movenames.txt', 'gowvr_logs')) {
             if (Send-ToRecycleBin (Join-Path $game $f) $game) { Say "$f -> Recycle Bin" }
         }
@@ -428,5 +483,94 @@ if ($Mode -eq 'Uninstall') {
     }
     Write-Host ''
     Say 'Done. God of War starts normally on your monitor again.'
+    Done 0
+}
+
+# ---- a copy of the player's saves for a bug report (owner 2026-11-15) ---------------------------------------------
+# Where God of War (2018) keeps its saves on PC, for the Steam, Epic and GOG copies alike: <Saved Games>\God of War\
+# <a folder per account (the store's account ID)>\game.sav - every save slot is in that one file (Sony's support page
+# "Find save data files"; the owner's own install: Saved Games\God of War\<Steam ID>\game.sav). Steam Cloud only syncs
+# that folder. "Saved Games" is read from Windows' own setting (User Shell Folders) because it can be moved (OneDrive,
+# another drive); %USERPROFILE%\Saved Games otherwise.
+# SAFETY - the saves are never changed: refused while the game runs (no half-written save copied); each file is opened
+# for READING only (FileShare.ReadWrite: never locked against the game); its SHA-256 is taken before and after and the
+# copy's must match; nothing is written, moved, renamed or deleted under Saved Games. The copy goes to a new folder in
+# %TEMP%, is zipped onto the Desktop, and only that temporary copy is removed. Folders named backup* (the player's own
+# backups) are skipped; each account folder is named profile_1, profile_2 ... in the zip (no account ID in it).
+function Get-SavedGamesDir {
+    try {
+        $v = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' `
+              -ErrorAction Stop).'{4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}'
+        if ($v) {
+            $p = [Environment]::ExpandEnvironmentVariables($v)
+            if (Test-Path -LiteralPath $p) { return $p }
+        }
+    } catch { }
+    return (Join-Path $env:USERPROFILE 'Saved Games')
+}
+
+function Get-Sha256([string]$path) {
+    $s = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $h = [Security.Cryptography.SHA256]::Create()
+        return [BitConverter]::ToString($h.ComputeHash($s))
+    } finally { $s.Dispose() }
+}
+
+if ($Mode -eq 'Save') {
+    Banner 'GOD OF WAR VR MOD  -  COPY MY SAVE'
+    if (Test-GoWRunning) { Warn 'God of War is running. Close it first (a save is copied only while the game is closed), then run this again.'; Done 1 }
+    $root = Join-Path (Get-SavedGamesDir) 'God of War'
+    if (-not (Test-Path -LiteralPath $root)) { Bad "No God of War saves were found (looked in $root)."; Done 1 }
+    $accounts = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^(?i)backup' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'game.sav')) })
+    # a game.sav straight in God of War\ (no account folder - possible for the DRM-free GOG copy) counts as a profile too
+    if (Test-Path -LiteralPath (Join-Path $root 'game.sav')) { $accounts = @(Get-Item -LiteralPath $root) + $accounts }
+    if ($accounts.Count -eq 0) { Bad "No game.sav was found in $root."; Done 1 }
+    Say "Your saves: $root"
+    Say 'They are only READ - nothing in that folder is changed, moved or deleted.'
+    $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+    $tmp = Join-Path $env:TEMP "gowvr_save_copy_$stamp"
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $zip = $null
+    try {
+        $i = 0
+        $copied = 0
+        foreach ($acc in $accounts) {
+            $i++
+            $dst = Join-Path $tmp "profile_$i"
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            # only the save itself (game.sav, and any game.sav.* the game keeps beside it) - nothing else from the folder
+            foreach ($f in Get-ChildItem -LiteralPath $acc.FullName -File -Filter 'game.sav*' -ErrorAction SilentlyContinue) {
+                $before = Get-Sha256 $f.FullName
+                $to = Join-Path $dst $f.Name
+                $in = [IO.File]::Open($f.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                try {
+                    $out = [IO.File]::Open($to, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                    try { $in.CopyTo($out) } finally { $out.Dispose() }
+                } finally { $in.Dispose() }
+                if ((Get-Sha256 $to) -ne $before) { Bad "The copy of $($f.Name) did not match the original - nothing was sent."; Done 1 }
+                if ((Get-Sha256 $f.FullName) -ne $before) { Warn "$($f.Name) changed while it was copied (is the game starting?) - run this again with the game closed."; Done 1 }
+                $copied++
+            }
+        }
+        $desk = [Environment]::GetFolderPath('Desktop')
+        if (-not $desk -or -not (Test-Path -LiteralPath $desk)) { $desk = $env:USERPROFILE }
+        $zip = Join-Path $desk "GoW_VR_save_$stamp.zip"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($tmp, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    } catch {
+        Bad "The save could not be copied ($($_.Exception.Message)). Your saves were not changed."
+        Done 1
+    } finally {
+        # only this tool's own temporary copy (a new folder under %TEMP%) - never anything under Saved Games
+        $t = [IO.Path]::GetFullPath($tmp)
+        if ($t.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and $t -match 'gowvr_save_copy_') {
+            Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Say "Saved a copy: $zip ($copied file(s), $($accounts.Count) profile(s); your saves are unchanged)"
+    Say 'Attach that zip to your report on the mod''s GitHub page (Issues).'
+    try { Start-Process explorer.exe "/select,`"$zip`"" } catch { }
     Done 0
 }

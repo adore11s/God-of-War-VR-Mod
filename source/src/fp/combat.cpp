@@ -1208,7 +1208,8 @@ void HitPauseWatch(bool holding, ULONGLONG now) {
 // explicitHands (D-098): a per-hand rule (carries, throwables) - the game plays these as sync moves, which must not make
 // them ANIMATE (both arms from the animation)
 struct InteractCtx { bool auth[2] = {false, false}; bool bodyLock = false, buttons = false, throwable = false, explicitHands = false; const char* why = ""; };
-std::atomic<bool> g_ctxAuth[2] = {false, false}, g_ctxBodyLock{false}, g_ctxButtons{false}, g_ctxThrowable{false}, g_ctxExplicit{false};
+std::atomic<bool> g_ctxAuth[2] = {false, false}, g_ctxBodyLock{false}, g_ctxButtons{false}, g_ctxThrowable{false}, g_ctxExplicit{false},
+    g_ctxCarryCrystal{false};  // D-324
 static InteractCtx ClassifyContext(const char* prim, const char* anim, bool sync) {
     InteractCtx c;
     char lp[128], la[128];  // lower-cased once (keys below are lower case)
@@ -1257,6 +1258,15 @@ static InteractCtx ClassifyContext(const char* prim, const char* anim, bool sync
     if (has("carryboar") || has("witchintro022")) { both(false, false, "carrying the boar"); c.explicitHands = true; return c; }
     if (has("carryson") || has("songapcarry")) { both(false, false, "carrying Atreus"); c.explicitHands = true; return c; }
     if (has("carrycrystal") || (has("crystal") && !attackName)) { c.auth[0] = true; c.why = "carrying a crystal (left)"; c.explicitHands = true; return c; }
+    // D-324 (owner: "like carrying the wooden log - the left arm no motion controls, the right arm motion controls"; owner
+    // log: standing still with the blue crystal the move is envCarryStand, which fell to the scene rule - both arms
+    // animated, body locked): exactly that move is the crystal carry too
+    if (!strcmp(lp, "envcarrystand") || !strcmp(la, "envcarrystand")) {
+        c.auth[0] = true;
+        c.why = "carrying a crystal (left)";
+        c.explicitHands = true;
+        return c;
+    }
     if (has("bifrost")) { c.auth[0] = true; c.why = "the Bifrost crystal (left)"; c.explicitHands = true; return c; }
     if (has("snowblind")) { c.auth[1] = true; c.why = "snow walk, axe on the ground (right)"; c.explicitHands = true; return c; }
     if (has("carrytreetrunk")) { c.auth[0] = true; c.why = "carrying a tree trunk (left)"; c.explicitHands = true; return c; }
@@ -1303,6 +1313,7 @@ static void ContextTick(bool f1, const char* prim, const char* anim, bool sync) 
     g_ctxBodyLock = hold(c.bodyLock, lastLock);
     g_ctxButtons = hold(c.buttons, lastButtons);
     g_ctxThrowable = hold(c.throwable, lastThrow);
+    g_ctxCarryCrystal = c.why && (!strcmp(c.why, "carrying a crystal (left)") || !strcmp(c.why, "the Bifrost crystal (left)"));
     g_ctxExplicit = hold(c.explicitHands, lastExplicit);
     if (!f1) return;
     // log each new animation combination with its decision (capped)
@@ -1329,6 +1340,7 @@ bool ContextHandAuthored(int h) { return h >= 0 && h < 2 && g_ctxAuth[h].load();
 bool ContextBodyLocked() { return g_ctxBodyLock.load(); }
 bool ContextPlainButtons() { return g_ctxButtons.load(); }
 bool ContextThrowable() { return g_ctxThrowable.load(); }
+bool ContextCarryCrystal() { return g_ctxCarryCrystal.load(); }
 
 void CombatTick() {
     {  // D-244

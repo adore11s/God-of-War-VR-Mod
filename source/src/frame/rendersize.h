@@ -25,6 +25,11 @@ void SetRuntimeEyeSize(int px);
 int AutoRenderSize();
 // a session told its eye image size (the panel offers "Auto")
 bool RuntimeEyeSizeKnown();
+// D-329, render thread: the desktop window's real client size while it is the mod's (VR, Windowed; the player may
+// resize it) - the picture is fitted into it with its shape kept. False = the game's own window (nothing to fit).
+bool DesktopWindowClient(int* w, int* h);
+// D-329c, render thread: the game renders the square stereo view now (not a flat screen)
+bool SquareViewNow();
 // VR summary / VR check line (log)
 void RenderSizeDiagText(char* out, size_t n);
 

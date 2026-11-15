@@ -538,7 +538,7 @@ void __fastcall hk_Kick() {
             static int modeWas = 0;  // 0 native, 1 AFR, 2 mono
             const bool single = g_vr.load() && EyesEnabled();
             const bool mono = single && config::GetFloat("mono_rendering", 0.f) > 0.5f;
-            const bool afr = single && !mono && config::GetFloat("afr_rendering", 0.f) > 0.5f;
+            const bool afr = single && !mono && config::GetFloat("afr_rendering", 1.f) > 0.5f;
             const int mode = mono ? 2 : afr ? 1 : 0;
             if (mode != modeWas) {
                 modeWas = mode;

@@ -9,14 +9,22 @@
 #include "../stereo/lodprobe.h"
 #include "../fp/firstperson.h"
 #include "../fp/arms.h"
+#include "../fp/body.h"
+#include "welcome_draw.h"
 #include <windows.h>
+#include <d2d1.h>
+#include <dwrite_3.h>
+#include <wincodec.h>
 #include <atomic>
+// windowscodecs.dll's own factory entry (exported, in windowscodecs.lib; not in the SDK headers)
+extern "C" HRESULT WINAPI WICCreateImagingFactory_Proxy(UINT SDKVersion, IWICImagingFactory** ppIWICImagingFactory);
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
 namespace gowvr::vr {
 namespace {
+using namespace welcome;  // D-328: the welcome drawing (welcome_draw.cpp)
 
 // panel pixels (D-253: 11 rows of kRow + the hints; D-283 12, D-284 13, D-286 15, D-288 16, D-289 14; D-292 13 rows and two
 // hint lines: 122 + 13 x 120 + 116; D-295 14 rows: 122 + 14 x 120 + 116; D-298 13 rows again; D-300 14: 122 + 14 x 120 + 116;
@@ -74,7 +82,7 @@ bool Walls() { return config::GetFloat("walls_f1", 1.f) > 0.5f; }
 // owner 2026-10-18: finishers / executions in first person (as before) or third person (the game's own camera;
 // fp/firstperson.cpp FinisherScene)
 bool FinisherTp() { return config::GetFloat("finisher_third_person", 1.f) > 0.5f; }
-bool Afr() { return config::GetFloat("afr_rendering", 0.f) > 0.5f; }         // D-241
+bool Afr() { return config::GetFloat("afr_rendering", 1.f) > 0.5f; }         // D-241
 bool Mono() { return config::GetFloat("mono_rendering", 0.f) > 0.5f; }       // D-294 (r1.cpp: it wins over AFR)
 bool AxeWeight() { return config::GetFloat("axe_weight", 0.f) > 0.5f; }      // D-295 (stereo/headcam.cpp)
 bool Motion() { return config::GetFloat("motion_controls", 1.f) > 0.5f; }    // D-244 (fp::MotionControls reads it)
@@ -171,6 +179,36 @@ void Apply(Action a) {
         RowManual() ? "manual" : "game", CompassHead() ? "head" : "always");
 }
 
+// D-317 (owner: "redo the VR panel with that kind of background - light shapes on the grey, your own shapes - and the
+// font Gotham"): the background is a dark grey with faint light shapes running up-right at 30 deg in staggered streams -
+// open chevrons, double chevrons, diamond outlines, rune-like dashes with a dot, loose dots - drawn once (anti-aliased,
+// signed distances in the streams' frame, one shape per cell) and copied under every redraw
+uint32_t g_bgPix[kW * kH];
+bool g_bgMade = false;
+void MakeBackground() {
+    if (g_bgMade) return;
+    g_bgMade = true;
+    for (int py = 0; py < kH; ++py)
+        for (int px = 0; px < kW; ++px) g_bgPix[py * kW + px] = PatternPixel(px, py);
+}
+
+// D-317b: the built-in Montserrat (RCDATA 3101..3103 of this module) added as private fonts; true = all three loaded
+bool LoadEmbeddedFonts() {
+    HMODULE mod = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)&LoadEmbeddedFonts, &mod))
+        return false;
+    int ok = 0;
+    for (int id = 3101; id <= 3103; ++id) {
+        HRSRC r = FindResourceW(mod, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));  // RT_RCDATA
+        HGLOBAL g = r ? LoadResource(mod, r) : nullptr;
+        void* p = g ? LockResource(g) : nullptr;
+        DWORD n = 0;
+        if (p && AddFontMemResourceEx(p, SizeofResource(mod, r), nullptr, &n) && n > 0) ++ok;
+    }
+    return ok == 3;
+}
+
 bool MakeSurface() {
     if (g_dc) return g_bits != nullptr;
     g_dc = CreateCompatibleDC(nullptr);
@@ -186,14 +224,26 @@ bool MakeSurface() {
     if (!g_bmp || !bits) { Log("panel: DIB section failed"); return false; }
     g_bits = (uint32_t*)bits;
     SelectObject(g_dc, g_bmp);
-    auto font = [](int px, int weight) {
+    auto font = [](int px, int weight, const wchar_t* face) {
         return CreateFontW(-px, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
     };
-    g_fTitle = font(54, FW_BOLD);
-    g_fLabel = font(36, FW_SEMIBOLD);
-    g_fButton = font(38, FW_SEMIBOLD);
-    g_fHint = font(28, FW_NORMAL);
+    // D-317b (owner: "search for a similar font that is free to use, like Gotham"): Montserrat (SIL OFL 1.1), built into
+    // the DLL (RCDATA 3101 Bold, 3102 SemiBold, 3103 Regular) and added for this process only - same on every PC
+    const bool mont = LoadEmbeddedFonts();
+    if (mont) {  // GDI faces: "Montserrat" Bold / Regular, "Montserrat SemiBold" (its own family)
+        g_fTitle = font(50, FW_BOLD, L"Montserrat");
+        g_fLabel = font(32, FW_SEMIBOLD, L"Montserrat SemiBold");
+        g_fButton = font(34, FW_BOLD, L"Montserrat");
+        g_fHint = font(26, FW_NORMAL, L"Montserrat");
+    } else {
+        g_fTitle = font(54, FW_BOLD, L"Segoe UI");
+        g_fLabel = font(36, FW_SEMIBOLD, L"Segoe UI");
+        g_fButton = font(38, FW_SEMIBOLD, L"Segoe UI");
+        g_fHint = font(28, FW_NORMAL, L"Segoe UI");
+    }
+    Log("panel: font %s (D-317b)", mont ? "Montserrat (built in)" : "Segoe UI (the built-in Montserrat did not load)");
+    MakeBackground();
     SetBkMode(g_dc, TRANSPARENT);
     return true;
 }
@@ -298,8 +348,10 @@ void Draw() {
     Layout(stepText, sizeText, handText);
     const COLORREF bg = RGB(40, 40, 42), title = RGB(178, 28, 28), button = RGB(66, 66, 70), hover = RGB(96, 96, 102),
                    selected = RGB(178, 28, 28), selectedHover = RGB(210, 50, 50), white = RGB(245, 245, 245),
-                   label = RGB(200, 200, 205), hint = RGB(150, 150, 155);
-    Fill({0, 0, kW, kH}, bg);
+                   label = RGB(225, 225, 230), hint = RGB(165, 165, 170);
+    (void)bg;
+    GdiFlush();
+    memcpy(g_bits, g_bgPix, sizeof(g_bgPix));  // D-317: the patterned grey
     Fill({0, 0, kW, 100}, title);
     Text(L"VR SETTINGS", {40, 0, kW - 40, 100}, g_fTitle, white, DT_LEFT | DT_VCENTER);
     Row rows[20];
@@ -395,7 +447,203 @@ void SmoothAim(int hand, float p[3], float d[3]) {
     memcpy(d, sd[hand], sizeof(sd[hand]));
 }
 
+// ---- D-318 welcome windows ------------------------------------------------------------------------------------------
+// Owner (2026-11-14): "when you open the VR mod for the first time (from my new update; a variable is written once you've
+// seen it, so the next update no longer shows it): it loads the 2D screens and ~3 seconds after it gets to the 3D
+// environment it pops up one window at a time - WELCOME / KO-FI SUPPORTER / VR CONTROLS - with CONTINUE / START bubbles
+// (transparent fill, white stroke); the windows follow the view slowly and are mandatory". Drawn with Direct2D +
+// DirectWrite (colour emoji, the built-in Montserrat) into a premultiplied bitmap, the panel's pattern behind, rounded.
+constexpr float kWelW = 1.3f, kWelDist = 1.6f;  // metres wide, metres in front of the head
+constexpr int kWelcomeVersion = 2;              // gowvr.ini welcome_seen below this = shown (D-328: 2 = the FIRST PERSON window)
+int g_wPage = 0, g_wDrawnPage = -1;
+bool g_wHover = false, g_wDrawnHover = false;
+std::atomic<bool> g_wActive{false};
+bool g_wDone = false, g_wPlaced = false;
+float g_wYaw = 0.f, g_wPos[3] = {};
+double g_wStereoSince = 0.0, g_wLastT = 0.0;
+bool g_wAltArmed = false;  // D-331: the keyboard / gamepad press counts only once released since the window showed
+
+// D-331: the next window (CONTINUE) or the end (START). False = all windows seen, nothing shown any more
+bool WelcomeNext(const char* how) {
+    if (++g_wPage >= kWelPages) {
+        config::SetFloat("welcome_seen", (float)kWelcomeVersion);
+        g_wDone = true;
+        g_wActive = false;
+        g_capture[0] = g_capture[1] = false;
+        Log("welcome: START (%s) - all windows seen, gowvr.ini welcome_seen %d (D-318)", how, kWelcomeVersion);
+        return false;
+    }
+    Log("welcome: CONTINUE (%s) - window %d of %d (D-318)", how, g_wPage + 1, kWelPages);
+    return true;
+}
+
+// D-331: the game's window (or another window of the game process) is in front - keys typed elsewhere never count
+bool GameInFront() {
+    DWORD pid = 0;
+    const HWND f = GetForegroundWindow();
+    return f && GetWindowThreadProcessId(f, &pid) && pid == GetCurrentProcessId();
+}
+
+double NowS() {
+    static LARGE_INTEGER f{};
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart / (double)f.QuadPart;
+}
+
+
 }  // namespace
+
+bool WelcomeActive() { return g_wActive.load(); }
+
+bool WelcomeTakesEnter() {
+    static std::atomic<bool> held{false};  // Enter still down from a welcome window
+    if (g_wActive.load()) {
+        held = true;
+        return true;
+    }
+    if (held.load()) {
+        if (GetAsyncKeyState(VK_RETURN) & 0x8000) return true;
+        held = false;
+    }
+    return false;
+}
+
+void WelcomeFlatFrame() {
+    g_wStereoSince = 0.0;  // the 3 s count starts again at the next 3D frames
+    if (g_wActive.exchange(false)) Log("welcome: a 2D screen - window %d hidden until the 3D view is back (D-318)", g_wPage + 1);
+    g_wPlaced = false;
+}
+
+bool WelcomeFrame(const InputSnapshot& in, const float head[3], const float headFwd[3], PanelLayer* out) {
+    const double now = NowS();
+    const float dt = g_wLastT > 0.0 ? (float)fmin(now - g_wLastT, 0.1) : 0.f;
+    g_wLastT = now;
+    if (g_wDone) return false;
+    if (config::GetFloat("welcome_seen", 0.f) >= (float)kWelcomeVersion) {
+        g_wDone = true;
+        Log("welcome: already seen (gowvr.ini welcome_seen %.0f) - not shown (D-318)", config::GetFloat("welcome_seen", 0.f));
+        return false;
+    }
+    // ~3 s into the 3D view (not during a cutscene)
+    if (!g_wActive.load()) {
+        if (fp::InCinematic()) { g_wStereoSince = 0.0; return false; }
+        if (g_wStereoSince == 0.0) g_wStereoSince = now;
+        static const double delay = fmax(config::GetFloat("welcome_delay_s", 3.f), 0.f);
+        if (now - g_wStereoSince < delay) return false;
+        if (!MakeD2D()) { g_wDone = true; return false; }
+        g_wActive = true;
+        g_wDrawnPage = -1;
+        g_wAltArmed = false;  // D-331: a key / pad button already held (in play) does not count
+        Log("welcome: window %d of %d shown (D-318)", g_wPage + 1, kWelPages);
+    }
+    // follows the view slowly: its direction eases toward the head's (yaw, 0.6 s), its height with the head's
+    float fx = headFwd[0], fz = headFwd[2];
+    const float fn = sqrtf(fx * fx + fz * fz);
+    if (fn > 0.2f) { fx /= fn; fz /= fn; }
+    else { fx = -sinf(g_wYaw); fz = -cosf(g_wYaw); }
+    const float target = atan2f(-fx, -fz);  // the direction the head looks (0 = -Z)
+    if (!g_wPlaced) {
+        g_wYaw = target;
+        g_wPos[1] = head[1] - 0.08f;
+        g_wPlaced = true;
+    } else {
+        float d = target - g_wYaw;
+        while (d > 3.14159265f) d -= 6.2831853f;
+        while (d < -3.14159265f) d += 6.2831853f;
+        g_wYaw += d * (1.f - expf(-dt / 0.6f));
+        g_wPos[1] += (head[1] - 0.08f - g_wPos[1]) * (1.f - expf(-dt / 0.4f));
+    }
+    g_wPos[0] = head[0] - sinf(g_wYaw) * kWelDist;
+    g_wPos[2] = head[2] - cosf(g_wYaw) * kWelDist;
+    const float c[3] = {g_wPos[0], g_wPos[1], g_wPos[2]};
+    const float yaw = atan2f(head[0] - c[0], head[2] - c[2]);  // the quad's +Z toward the head
+    Pose p{};
+    p.q[1] = sinf(0.5f * yaw);
+    p.q[3] = cosf(0.5f * yaw);
+    memcpy(p.p, c, sizeof(c));
+    const float h = kWelW * (float)kWH / (float)kWW;
+    const float nrm[3] = {sinf(yaw), 0.f, cosf(yaw)}, rgt[3] = {cosf(yaw), 0.f, -sinf(yaw)};
+    bool hover = false, cursor = false;
+    float hitP[3] = {};
+    for (int hand = 1; hand >= 0; --hand) {  // the right hand first
+        const HandState& hs = in.hand[hand];
+        bool hit = false;
+        if (hs.active && hs.aimValid) {
+            float d[3], ap[3] = {hs.aim.p[0], hs.aim.p[1], hs.aim.p[2]};
+            const float fwd[3] = {0.f, 0.f, -1.f};
+            Rotate(hs.aim.q, fwd, d);
+            SmoothAim(hand, ap, d);
+            const float dn = d[0] * nrm[0] + d[1] * nrm[1] + d[2] * nrm[2];
+            if (dn < -1e-3f) {
+                const float t = ((c[0] - ap[0]) * nrm[0] + (c[1] - ap[1]) * nrm[1] + (c[2] - ap[2]) * nrm[2]) / dn;
+                if (t > 0.f && t < 20.f) {
+                    const float q[3] = {ap[0] + d[0] * t, ap[1] + d[1] * t, ap[2] + d[2] * t};
+                    const float lx = (q[0] - c[0]) * rgt[0] + (q[2] - c[2]) * rgt[2], ly = q[1] - c[1];
+                    const float u = lx / kWelW + 0.5f, v = 0.5f - ly / h;
+                    if (u >= 0.f && u <= 1.f && v >= 0.f && v <= 1.f) {
+                        hit = true;
+                        if (!cursor) {
+                            cursor = true;
+                            memcpy(hitP, q, sizeof(q));
+                            const int px = (int)(u * kWW), py = (int)(v * kWH);
+                            hover = px >= g_wBtn.left && px < g_wBtn.right && py >= g_wBtn.top && py < g_wBtn.bottom;
+                            if (hs.trigger < 0.35f) g_armed[hand] = true;
+                            if (g_armed[hand] && hs.trigger > 0.75f) {
+                                g_armed[hand] = false;
+                                if (hover) {
+                                    XrHaptic(hand, 0.5f, 0.05f);
+                                    if (!WelcomeNext("trigger")) return false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        g_capture[hand] = hit;
+        if (!hit && hs.trigger < 0.35f) g_armed[hand] = true;
+    }
+    // D-331 (owner: "a way to close the welcome windows without VR controllers - keyboard or gamepad; make it work with
+    // Steam Input"): Enter on the keyboard (the game in front; Steam Input's keyboard bindings arrive the same way; not
+    // Space - a game action) or a gamepad's A / Cross (input::PadConfirmHeld: a real Xbox pad, Steam Input's virtual pad,
+    // a PlayStation pad; taken from the game meanwhile) press the button too - a gamepad player, or one whose controllers
+    // lie on the desk, is never stuck behind the windows with no HUD. A press counts once released since the window
+    // showed (a button held in play is not taken)
+    {
+        const bool key = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0 && GameInFront();
+        const bool pad = input::PadConfirmHeld();
+        if (!key && !pad) {
+            g_wAltArmed = true;
+        } else if (g_wAltArmed) {
+            g_wAltArmed = false;
+            if (!WelcomeNext(key ? "keyboard" : "gamepad")) return false;
+        }
+    }
+    if (hover && !g_wHover) XrHaptic(cursor ? 1 : 0, 0.15f, 0.02f);
+    g_wHover = hover;
+    out->dirty = false;
+    if (g_wPage != g_wDrawnPage || hover != g_wDrawnHover) {
+        WelcomeDraw(g_wPage, hover);
+        g_wDrawnPage = g_wPage;
+        g_wDrawnHover = hover;
+        out->dirty = true;
+    }
+    out->pose = p;
+    out->w = kWelW;
+    out->h = h;
+    out->pixels = g_wOut;
+    out->pw = kWW;
+    out->ph = kWH;
+    out->cursor = cursor;
+    if (cursor) {
+        out->cursorPose = p;
+        for (int j = 0; j < 3; ++j) out->cursorPose.p[j] = hitP[j] + nrm[j] * 0.01f;
+        out->cursorSize = 0.035f;
+    }
+    return true;
+}
 
 bool PanelFrame(const InputSnapshot& in, const Pose& screen, float screenW, const float head[3], PanelLayer* out) {
     if (!stereo::PauseMenuOpen()) { PanelHidden(); return false; }

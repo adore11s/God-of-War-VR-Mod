@@ -33,6 +33,23 @@ DWORD WINAPI HashThread(void*) {
     return 0;
 }
 
+// A local developer plugin: <game folder>\gowvr_dev.dll, loaded when it exists (never part of a release). Its own thread:
+// it waits until this DllMain has returned (the loader lock) before loading.
+// Owner 2026-11-15: the dev tool (the owner's local test cheats) must NEVER reach players - besides never being shipped
+// (tools/make_release.ps1 stops a publish that holds any of it), it is loaded only with gowvr.ini dev_plugin=1, a key
+// the release's gowvr.ini never has: a player's copy never loads a gowvr_dev.dll, wherever it came from.
+DWORD WINAPI DevPluginThread(void*) {
+    if (gowvr::config::GetFloat("dev_plugin", 0.f) < 0.5f) return 0;
+    wchar_t p[MAX_PATH];
+    GetModuleFileNameW(nullptr, p, MAX_PATH);
+    if (wchar_t* s = wcsrchr(p, L'\\')) *s = 0;
+    wcscat_s(p, L"\\gowvr_dev.dll");
+    if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) return 0;
+    const HMODULE m = LoadLibraryW(p);
+    gowvr::Log("dev plugin: %ls %s", p, m ? "loaded" : "could NOT be loaded");
+    return 0;
+}
+
 void OnAttach(bool staticLoad) {
     gowvr::LogOpen();
     wchar_t self[MAX_PATH], exe[MAX_PATH];
@@ -88,6 +105,7 @@ void OnAttach(bool staticLoad) {
     gowvr::frame::InstallRenderSize();  // square VR picture, small desktop window
     gowvr::input::InstallVirtualPad();
     gowvr::diag::StartCommandChannel();
+    if (HANDLE h = CreateThread(nullptr, 0, DevPluginThread, nullptr, 0, nullptr)) CloseHandle(h);
     g_armed = true;
 }
 }  // namespace
