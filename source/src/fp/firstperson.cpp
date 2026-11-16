@@ -200,7 +200,7 @@ static bool ScriptedScene() {
 // D-257: at the shop (the vendor's moves envVendor*, held 0.5 s past the last), every frame and whatever the F1 / D-207
 // settings - the UI keeps its shop size there (mutate.cpp UiScaleCurrent)
 std::atomic<bool> g_inShop{false};
-static void ShopSeenTick() {
+void ShopTick() {  // D-333: was ShopSeenTick, called from FirstPersonBase only (skipped by the 2D screen)
     static ULONGLONG lastSeen = 0;
     char prim[96];
     HeroPrimaryAnim(prim, sizeof(prim));
@@ -300,7 +300,6 @@ void SuspendCutsceneFP(const char* why) {
 bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
     const bool cine = InCinematic() || ScriptedScene();
     g_sceneAnimating = cine;
-    ShopSeenTick();  // D-257
     {  // D-220f: the suspension ends with the cutscene (1 s out of it - a cut between two scenes keeps it)
         static ULONGLONG outSince = 0;
         const ULONGLONG nowT = GetTickCount64();
@@ -324,8 +323,10 @@ bool FirstPersonBase(const Mat4& gameCam, Mat4* base) {
                 w ? "ON" : "off", c ? "ON" : "off");
         }
     }
-    const bool want = !FinisherScene() &&
-                      (cine ? (g_cutscene.load() && !g_f3Suspended.load()) : (g_gameplay.load() && !ShopScene()));
+    // D-334 (owner: "make the shop 3D again, always third person in the shop no matter what"): the shop wins over F1 and
+    // F3 alike (D-207 only covered gameplay F1)
+    const bool want = !FinisherScene() && !ShopScene() &&
+                      (cine ? (g_cutscene.load() && !g_f3Suspended.load()) : g_gameplay.load());
     const int mode = !want ? 0 : (cine ? 2 : 1);
     int head = want ? FindJointByHash(kHeadHash) : -1;
     Mat4 h{};

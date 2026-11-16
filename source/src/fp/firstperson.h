@@ -30,5 +30,8 @@ bool DiagBodyBase(Mat4* base);
 void SuspendCutsceneFP(const char* why);
 // D-257: Kratos is at a shop (the vendor's moves) - any thread
 bool InShop();
+// D-333: refreshes InShop - once per frame from the view-A latch (mutate.cpp), whatever the camera mode. It used to run
+// only inside FirstPersonBase, which the 2D screen skips: the shop's 2D screen then kept itself on after the shop
+void ShopTick();
 
 }  // namespace gowvr::fp

@@ -494,6 +494,12 @@ float UiSizeMul() {
     const float m = config::GetFloat("ui_size", 0.75f);
     return m > 0.1f && m <= 2.f ? m : 1.f;
 }
+// D-335 (owner: "make the shop UI 10 percent smaller", then "10 percent smaller again"): the shop's UI size (D-257) times
+// ui_size_shop (0.81 = 0.9 x 0.9) - the whole UI picture (sharp UI / HUD layer), the hacksilver and other money counters included
+static float ShopUiMul() {
+    static const float m = config::GetFloat("ui_size_shop", 0.81f);
+    return m > 0.1f && m <= 2.f ? m : 1.f;
+}
 // D-285 (owner, a Steam Link player on Quest: "the UI is tiny and low resolution"; their log: rendered eye frustum tanX
 // 1.192 (100 deg) - the owner's PS VR2 2.300 (133 deg)): the HUD is a share of the rendered frustum, tuned on the
 // PS VR2 - on a narrower headset it came out about half as wide in the view. The scale now keeps the HUD at the same
@@ -523,7 +529,7 @@ void UiScaleView(uint8_t* view) {
     }
     const bool aiming = aimSeen && GetTickCount64() - aimSeen < 400;
     // D-257: the overall size (ui_size) shrinks everything but the shop's UI, which keeps its own size
-    const float s = UiFit(fp::InShop() ? g_uiScale
+    const float s = UiFit(fp::InShop() ? g_uiScale * ShopUiMul()  // D-335
                                        : ((fpm == 1 || fpm == 2 || aiming) && g_uiScaleFp > 0.05f ? g_uiScaleFp : g_uiScale) * UiSizeMul());  // D-285
     if (!g_headCamOn || g_screen2D.load()) { ++g_uiSkipCam; return; }
     float* P = (float*)(view + 0xd0);
@@ -823,7 +829,11 @@ void __fastcall hk_ViewUpdate(uint8_t* view) {
         g_lastPause = pause; g_lastLoading = loading; g_lastFaded = faded; g_lastFadeA = fadeA; g_lastVideo = video;
         // D-327 (owner: "in the shop make it a flat 2D screen floating in black"): at the shop (fp::InShop - the vendor's
         // moves envVendor*, D-257) the same flat screen as the pause menu. gowvr.ini screen_2d_shop 0 = off
-        static const bool shopOn = config::GetFloat("screen_2d_shop", 1.f) > 0.5f;
+        // D-333 (owner: "when you opt out of the shop it still stays 2D"): the shop test now runs here every frame -
+        // inside FirstPersonBase it stopped as soon as the 2D screen skipped the head camera, so InShop stayed true
+        // D-334 (owner: "nah, make the shop still 3D"): off by default - the shop is stereo third person (D-207)
+        static const bool shopOn = config::GetFloat("screen_2d_shop", 0.f) > 0.5f;
+        fp::ShopTick();
         const bool shop = shopOn && fp::InShop();
         const bool on = g_headCamOn &&
                         (g_screen2DMode == 2 || (g_screen2DMode == 1 && (pause || loading || faded || video || shop)));
@@ -1583,7 +1593,7 @@ float UiScaleCurrent() {
     const float s = g_uiScale < 0.f ? config::GetFloat("ui_scale", 0.35f) : g_uiScale;
     const float sFp = g_uiScaleFp < 0.f ? config::GetFloat("ui_scale_fp", 0.42f) : g_uiScaleFp;
     const int fpm = fp::FpMode();
-    if (fp::InShop()) return UiFit(s);  // D-257: the shop's UI keeps its size (D-285: at the same angle on every headset)
+    if (fp::InShop()) return UiFit(s * ShopUiMul());  // D-257, D-335 10 % smaller: the shop's UI keeps its size (D-285: at the same angle on every headset)
     return UiFit(((fpm == 1 || fpm == 2) && sFp > 0.05f ? sFp : s) * UiSizeMul());
 }
 

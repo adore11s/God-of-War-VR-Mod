@@ -125,6 +125,7 @@ Most useful settings:
 | `autovr` | 1 | 0 = start flat and press F9 for VR |
 | `ui_scale` / `ui_scale_fp` | 0.35 / 0.5 | HUD size in third / first person |
 | `ui_size` | 0.75 | Overall HUD size on top of those (1 = the older, bigger HUD). The shop's screens keep their size |
+| `ui_size_shop` | 0.81 | Size of the shop's screens, money included (1 = as in v0.3.0) |
 | `ui_same_angle` / `ui_ref_tan` | 1 / 2.3 | The HUD looks the same size on every headset (as on a PS VR2). 0 = a share of the picture, as before (small on narrower headsets) |
 | `pad_mode` | 0 | 0 = Xbox icons, 1 = PlayStation icons (F10 / F11 change it) |
 | `rumble_strength` | 1.0 | Controller rumble strength (0 = off) |
