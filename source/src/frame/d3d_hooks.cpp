@@ -14,6 +14,7 @@
 #include "../stereo/dlsseyes.h"
 #include "../stereo/taaeyes.h"
 #include "../stereo/mutate.h"
+#include "../stereo/stereocheck.h"
 #include "../vr/xr.h"
 #include <windows.h>
 #include <d3d11.h>
@@ -176,6 +177,7 @@ void SharpUiOnPresent(IDXGISwapChain* sc) {
 
 HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
     OnPresent(sc, "IDXGISwapChain::Present", sync, flags);
+    stereo::StereoCheckOnPresent(sc);  // D-336: the GPU's queued frames (log only)
     SharpUiOnPresent(sc);
     stereo::EyesOnPresent(sc);
     stereo::LoadWatchTick();
@@ -188,6 +190,7 @@ HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) 
 
 HRESULT STDMETHODCALLTYPE hk_Present1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* p) {
     OnPresent(sc, "IDXGISwapChain1::Present1", sync, flags);
+    stereo::StereoCheckOnPresent(sc);  // D-336 (as in hk_Present)
     SharpUiOnPresent(sc);
     stereo::EyesOnPresent(sc);
     stereo::LoadWatchTick();

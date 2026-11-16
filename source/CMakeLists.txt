@@ -55,7 +55,9 @@ add_library(gowvr SHARED
   src/input/vpad.cpp
   src/input/turning.cpp
   src/core/detour.cpp
+  src/core/parts.cpp
   src/core/addr.cpp
+  src/stereo/stereocheck.cpp
   src/stereo/mutate.cpp
   src/stereo/r1.cpp
   src/stereo/eyes.cpp

@@ -25,6 +25,7 @@
 // 1800 TAA dispatches the inputs restored / outputs saved (and when no input matched a TAA output - then the history is
 // not one of them and nothing is changed).
 #include "taaeyes.h"
+#include "stereocheck.h"
 #include "../core/addr.h"
 #include "eyes.h"
 #include "../core/config.h"
@@ -33,6 +34,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 
 namespace gowvr::stereo {
@@ -246,6 +248,17 @@ void TaaEyesInstall() {
 }
 
 void TaaEyesReset() { g_resetReq = true; }
+
+// D-336: for the stereo check
+void TaaEyesStatsText(char* out, size_t n) {
+    if (!g_on.load()) {  // (the shaders are only looked for while it is on)
+        sprintf_s(out, n, "per-eye TAA history off (taa_per_eye 0): without DLSS both eyes share the game's TAA history");
+        return;
+    }
+    sprintf_s(out, n, "per-eye TAA history on, TAA shaders %s, TAA dispatches %llu (history restored %llu, saved %llu)",
+              g_taaN > 0 ? "found" : "not found yet", (unsigned long long)g_dispatches, (unsigned long long)g_restored,
+              (unsigned long long)g_saved);
+}
 
 void TaaEyesEnable(bool on) {
     g_on = on;

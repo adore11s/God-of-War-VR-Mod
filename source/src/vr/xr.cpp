@@ -8,6 +8,7 @@
 #include "../core/addr.h"
 #include "../stereo/mutate.h"
 #include "../stereo/sharpui.h"
+#include "../stereo/stereocheck.h"
 #include "../frame/rendersize.h"
 #include "../fp/firstperson.h"
 #include "../input/vrmap.h"
@@ -1651,6 +1652,7 @@ void LogSummary(IDXGISwapChain* sc, const DXGI_SWAP_CHAIN_DESC& d, const InputSn
         frame::RenderSizeDiagText(rs, sizeof(rs));
         Log("summary: %s", rs);
     }
+    stereo::StereoCheckLog(stereo, number == 1);  // D-336: what did not load, this PC, the stereo path, the verdict
     Log("==== end of VR summary #%d ====", number);
     (void)sc;
 }
@@ -1698,6 +1700,9 @@ void VrCheckTick() {
         config::GetFloat("wristpitch_quest", 25.f), config::GetFloat("wristyaw_quest", 0.f),
         config::GetFloat("wristroll_quest", 0.f), config::GetFloat("wristpitch_other", 0.f),
         config::GetFloat("wristyaw_other", 0.f), config::GetFloat("wristroll_other", 0.f));
+    // D-336: the stereo steps' per-frame rates since the last check
+    stereo::StereoHealthLog(lines, g_submitted.load(),
+                            g_frame.predictedDisplayPeriod > 0 ? g_frame.predictedDisplayPeriod / 1e6 : 0.0);
 }
 
 void MaybeLogSummary(IDXGISwapChain* sc, bool stereo) {

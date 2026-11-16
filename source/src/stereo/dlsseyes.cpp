@@ -8,6 +8,7 @@
 // DLSS Super Resolution (feature 1) a second instance is created with the same parameters, and EvaluateFeature uses it
 // while the render thread executes eye 1's command streams (eyes.cpp EyesRenderEye). Release / Shutdown drop the twin.
 #include "dlsseyes.h"
+#include "stereocheck.h"
 #include "eyes.h"
 #include "../core/addr.h"
 #include "../core/config.h"
@@ -689,6 +690,21 @@ bool DlssFixesActive() {
         Log("dlss: the game's DLSS is %s - the DLSS stereo fixes (eye history, shared jitter phase, eye 1's skinned "
             "previous pose) %s (D-242)", dlss ? "ON" : "off", dlss ? "on" : "off - the pre-DLSS logic");
     return dlss;
+}
+
+// D-336: for the stereo check - the game's DLSS flag, whether the game's NGX calls reach the per-eye wrapper, the per-eye
+// instances and the evaluations on each
+void DlssStatsText(char* out, size_t n) {
+    const uint8_t* on = (const uint8_t*)GameVa(kDlssOnVa);
+    size_t twins;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        twins = g_twins.size();
+    }
+    sprintf_s(out, n, "DLSS flag %s, NGX calls %s, per-eye DLSS %s, eye-1 instances %zu, evaluations game's %llu / eye-1 %llu",
+              !on ? "?" : *on == 1 ? "ON" : "off", o_Create ? "wrapped" : "not seen (DLSS not started)",
+              On() ? "on" : "off (dlss_per_eye 0)", twins, (unsigned long long)g_evals[0].load(),
+              (unsigned long long)g_evals[1].load());
 }
 
 void DlssVrFrame(bool stereo) {

@@ -1,6 +1,7 @@
 #include "detour.h"
 #include "log.h"
 #include "addr.h"
+#include "parts.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <atomic>
@@ -85,7 +86,10 @@ void ResumeAll(std::vector<HANDLE>& ts) {
 // signature leaves open (a moved call / RIP displacement) may differ; every other guard byte must match
 uint8_t* SiteTarget(const HookSite& site) {
     uint8_t* t = (uint8_t*)GameVa(site.staticVa);
-    if (!t) Log("detour: %s not found on this build -> not installed", site.name);
+    if (!t) {
+        Log("detour: %s not found on this build -> not installed", site.name);
+        PartNote(site.name, false, "not found on this game build");  // D-336
+    }
     return t;
 }
 bool GuardOk(const HookSite& site, const uint8_t* t) {
@@ -111,11 +115,13 @@ bool DetourInstall(const HookSite& site, void* hook, void** original) {
     if (!target) return false;
     if (!GuardOk(site, target)) {
         Log("detour: %s guard mismatch at %p -> not installed", site.name, target);
+        PartNote(site.name, false, "game code differs at the hook (guard mismatch)");  // D-336
         return false;
     }
     uint8_t* block = AllocNear(target);
     if (!block) {
         Log("detour: %s no near memory", site.name);
+        PartNote(site.name, false, "no memory near the game code");  // D-336
         return false;
     }
     uint8_t* relay = block;        // jmp [rip] -> hook
@@ -131,6 +137,7 @@ bool DetourInstall(const HookSite& site, void* hook, void** original) {
         ResumeAll(threads);
         if (attempt == 20) {
             Log("detour: %s a thread kept executing the patch window -> not installed", site.name);
+            PartNote(site.name, false, "a game thread kept running the patched bytes");  // D-336
             VirtualFree(block, 0, MEM_RELEASE);
             return false;
         }
@@ -151,6 +158,7 @@ bool DetourInstall(const HookSite& site, void* hook, void** original) {
     g_installed.push_back({&site, target, block});
     NoteBlock(block);
     Log("detour: %s installed at %p (stolen %d, relay %p)", site.name, target, site.stolen, relay);
+    PartNote(site.name, true);  // D-336
     return true;
 }
 
@@ -160,10 +168,11 @@ bool DetourCallSite(const HookSite& site, void* fn) {
     if (!target) return false;
     if (site.stolen < 5 || !GuardOk(site, target)) {
         Log("detour: call site %s guard mismatch at %p -> not installed", site.name, target);
+        PartNote(site.name, false, "game code differs at the call site (guard mismatch)");  // D-336
         return false;
     }
     uint8_t* block = AllocNear(target);
-    if (!block) return false;
+    if (!block) { PartNote(site.name, false, "no memory near the game code"); return false; }  // D-336
     WriteAbsJmp(block, fn);
     FlushInstructionCache(GetCurrentProcess(), block, 16);
     std::vector<HANDLE> threads;
@@ -172,6 +181,7 @@ bool DetourCallSite(const HookSite& site, void* fn) {
         ResumeAll(threads);
         if (attempt == 20) {
             Log("detour: call site %s busy -> not installed", site.name);
+            PartNote(site.name, false, "a game thread kept running the patched bytes");  // D-336
             VirtualFree(block, 0, MEM_RELEASE);  // D-110 (was leaked)
             return false;
         }
@@ -191,6 +201,7 @@ bool DetourCallSite(const HookSite& site, void* fn) {
     g_installed.push_back({&site, target, block});
     NoteBlock(block);
     Log("detour: call site %s patched at %p (relay %p)", site.name, target, block);
+    PartNote(site.name, true);  // D-336
     return true;
 }
 
@@ -202,13 +213,14 @@ bool DetourCaseCall(const HookSite& site, int callOffset, const uint8_t* call, i
         !GuardOk(site, target) || memcmp(target + callOffset, call, callLen) != 0 ||
         target[callOffset + callLen] != 0xE9) {
         Log("detour: case %s guard mismatch at %p -> not installed", site.name, target);
+        PartNote(site.name, false, "game code differs at the switch case (guard mismatch)");  // D-336
         return false;
     }
     int32_t rel;
     memcpy(&rel, target + callOffset + callLen + 1, 4);
     uint8_t* cont = target + callOffset + callLen + 5 + rel;  // where the case's jmp goes
     uint8_t* block = AllocNear(target);
-    if (!block) return false;
+    if (!block) { PartNote(site.name, false, "no memory near the game code"); return false; }  // D-336
     uint8_t* p = block;
     memcpy(p, target, callOffset);  // the argument setup
     p += callOffset;
@@ -228,6 +240,7 @@ bool DetourCaseCall(const HookSite& site, int callOffset, const uint8_t* call, i
         ResumeAll(threads);
         if (attempt == 20) {
             Log("detour: case %s busy -> not installed", site.name);
+            PartNote(site.name, false, "a game thread kept running the patched bytes");  // D-336
             VirtualFree(block, 0, MEM_RELEASE);  // D-110 (was leaked)
             return false;
         }
@@ -247,6 +260,7 @@ bool DetourCaseCall(const HookSite& site, int callOffset, const uint8_t* call, i
     g_installed.push_back({&site, target, block});
     NoteBlock(block);
     Log("detour: case %s patched at %p (stub %p, continues at %p)", site.name, target, block, cont);
+    PartNote(site.name, true);  // D-336
     return true;
 }
 
@@ -256,10 +270,11 @@ bool DetourStub(const HookSite& site, const uint8_t* code, int len) {
     if (!target) return false;
     if (site.stolen < 5 || site.stolen > 32 || len < 1 || len > 4096 - 32 || !GuardOk(site, target)) {
         Log("detour: stub %s guard mismatch at %p -> not installed", site.name, target);
+        PartNote(site.name, false, "game code differs at the stub site (guard mismatch)");  // D-336
         return false;
     }
     uint8_t* block = AllocNear(target);
-    if (!block) return false;
+    if (!block) { PartNote(site.name, false, "no memory near the game code"); return false; }  // D-336
     memcpy(block, code, len);
     WriteAbsJmp(block + len, target + site.stolen);
     // D-220b: unwind data = the site function's own codes (version 1, no chain), flags 0 (its handler's RVA belongs to
@@ -308,6 +323,7 @@ bool DetourStub(const HookSite& site, const uint8_t* code, int len) {
         ResumeAll(threads);
         if (attempt == 20) {
             Log("detour: stub %s busy -> not installed", site.name);
+            PartNote(site.name, false, "a game thread kept running the patched bytes");  // D-336
             VirtualFree(block, 0, MEM_RELEASE);
             return false;
         }
@@ -327,6 +343,7 @@ bool DetourStub(const HookSite& site, const uint8_t* code, int len) {
     g_installed.push_back({&site, target, block});
     NoteBlock(block);
     Log("detour: stub %s patched at %p (stub %p, back at %p)", site.name, target, block, target + site.stolen);
+    PartNote(site.name, true);  // D-336
     return true;
 }
 

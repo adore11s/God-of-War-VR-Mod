@@ -133,6 +133,25 @@ void SetFloats(const std::vector<std::pair<const char*, float>>& values) {
 
 void SetFloat(const char* key, float value) { SetFloats({{key, value}}); }
 
+// D-336: every "key=value" line of the file in its order (notes and blank lines left out), for the stereo check
+std::string KeysText() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    EnsureLoaded();
+    std::string out;
+    for (const auto& l : g_lines) {
+        if (l.empty() || l[0] == '#' || l[0] == ';' || l.find('=') == std::string::npos) continue;
+        if (!out.empty()) out += ' ';
+        out += l;
+    }
+    return out;
+}
+
+bool HasKey(const char* key) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    EnsureLoaded();
+    return g_values.count(key) != 0;
+}
+
 bool CreateIfMissing(const char* text) {
     if (!text || !*text || GetFileAttributesW(Path().c_str()) != INVALID_FILE_ATTRIBUTES) return false;
     FILE* f = nullptr;

@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -15,5 +16,8 @@ void SetFloat(const char* key, float value);
 bool CreateIfMissing(const char* text);
 // Several keys in ONE write (the learned grips: 13 values).
 void SetFloats(const std::vector<std::pair<const char*, float>>& values);
+// D-336 (stereo check in the log): every "key=value" line of the file, space-separated in file order; whether a key is set
+std::string KeysText();
+bool HasKey(const char* key);
 
 }  // namespace gowvr::config

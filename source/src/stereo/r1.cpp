@@ -12,6 +12,8 @@
 #include "dlsseyes.h"
 #include "taaeyes.h"
 #include "lodprobe.h"
+#include "stereocheck.h"
+#include "../core/parts.h"
 #include "../fp/body.h"
 #include <windows.h>
 #include <atomic>
@@ -59,6 +61,19 @@ std::atomic<bool> g_skipParticles{false};
 std::atomic<uint64_t> g_particleSkips{0};
 std::atomic<uint64_t> g_particleCalls{0};  // (r1fid diagnostic)
 
+// D-336 stereo health (owner: "laser lights / god rays out of flames' glow in Native stereo for other players, never for
+// me - make detailed logging of stereo"): counters the once-a-minute "stereo health" line turns into per-frame rates, so a
+// player's log shows which stereo step behaved differently from the owner's. Game thread writes, the VR check reads.
+std::atomic<uint64_t> g_hNative{0}, g_hAfr{0}, g_hMono{0}, g_h2D{0};   // frames by rendering method
+std::atomic<uint64_t> g_hPartK1{0}, g_hPartK2{0}, g_hPartOther{0};     // particle frame job calls: eye 0 / eye 1 / else
+std::atomic<uint64_t> g_hFogFix{0}, g_hFogSeen{0};                     // fog history flip undone (F-012) / fog passes met
+std::atomic<uint64_t> g_hFlareSkip{0}, g_hFlareDraw{0};                // lens flare draws skipped / drawn
+std::atomic<uint64_t> g_hLagK1[4];   // render thread frames behind at eye 0's kick: 0, 1, 2, 3+
+std::atomic<uint64_t> g_hSync[6];    // the wait before eye 1: <1, 1-5, 5-11, 11-50, 50-200, >200 ms
+std::atomic<uint64_t> g_hSyncCapped{0};
+std::atomic<uint32_t> g_hSyncMaxUs{0};
+std::atomic<uint64_t> g_hGpuAtEye1[4];  // GPU frames still queued (last Present) when eye 1 started: 0, 1, 2, 3+
+
 template <class T> T& G(uint64_t va);
 template <class F> F Fn(uint64_t va);
 extern std::atomic<int> g_kickPhase;
@@ -80,6 +95,10 @@ void ListsUnlock(volatile long* l) { _InterlockedCompareExchange(l, 0, 1); }
 
 void __fastcall hk_Particle(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     ++g_particleCalls;
+    {
+        const int ph = g_kickPhase.load();
+        ++(ph == 1 ? g_hPartK1 : ph == 3 ? g_hPartK2 : g_hPartOther);  // D-336
+    }
     if (g_skipParticles.load()) {
         ++g_particleSkips;
         return;
@@ -179,8 +198,10 @@ void __fastcall hk_FlareDraw(void* self, void* a, void* b, void* c) {
     if (g_vr.load() && !keep) {
         static std::atomic<int> logged{0};
         if (logged.fetch_add(1) == 0) Log("r1: lens flares off in VR (screen-space effect, D-225)");
+        ++g_hFlareSkip;  // D-336
         return;
     }
+    ++g_hFlareDraw;
     o_FlareDraw(self, a, b, c);
 }
 
@@ -259,7 +280,9 @@ void PassLoop(int vslot, bool resetFilter) {
         // parity +0x4d1 (and the 0x1412390a8/b0 pointers, restored by the bank). Between the eyes the rest of vfunc_1
         // runs as in the stable build, but the flip is undone, so history alternates exactly once per frame (F-012).
         // Skipping the whole call instead hung the GPU in gameplay (F-013).
-        const bool fog = g_fogFix && vslot == 1 && *(uint64_t*)pass == (uint64_t)GameVa(0x140df8b28ull);  // D-187
+        const bool isFog = vslot == 1 && *(uint64_t*)pass == (uint64_t)GameVa(0x140df8b28ull);  // D-187
+        const bool fog = g_fogFix && isFog;
+        if (isFog) { ++g_hFogSeen; if (fog) ++g_hFogFix; }  // D-336
         uint8_t fogState[12];
         if (fog) memcpy(fogState, (uint8_t*)pass + 0x4c8, sizeof(fogState));
         (*(PFN_PassCall**)pass)[vslot](pass, rec);
@@ -518,6 +541,7 @@ void __fastcall hk_Kick() {
     }
     wasFlat2D = flat2D;
     if (flat2D) {
+        ++g_h2D;  // D-336
         g_skinEye = -1;
         fp::BodyHideDrawBegin();
         o_Kick();
@@ -549,6 +573,7 @@ void __fastcall hk_Kick() {
                                         : afr ? "AFR ON (one eye per frame, alternating)" : "native (both eyes every frame)");
             }
             if (mode) {
+                ++(mono ? g_hMono : g_hAfr);  // D-336
                 static int afrEye = 1;
                 if (afr) afrEye ^= 1;
                 const int eye = mono ? 0 : afrEye;
@@ -583,6 +608,12 @@ void __fastcall hk_Kick() {
                 if (--g_double == 0) Log("r1: double-kick window over (%llu frames)", (unsigned long long)g_doubled.load());
                 return;
             }
+        }
+        ++g_hNative;  // D-336: native stereo frame - and how far the render thread is behind as eye 0 starts
+        {
+            const uint64_t sub = G<uint64_t>(0x142d50670), done = G<uint64_t>(0x142d50678);
+            const uint64_t lag = sub >= done ? sub - done : 0;
+            ++g_hLagK1[lag > 3 ? 3 : lag];
         }
         bool snap = g_snap.load() > 0;
         if (snap) Snap("before-k1");
@@ -671,6 +702,14 @@ void __fastcall hk_Kick() {
             double ms = double(t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
             g_syncMsSum += ms;
             if (ms > g_syncMsMax) g_syncMsMax = ms;
+            {   // D-336: the wait's length in buckets, the cap, and the GPU's queue as eye 1 starts
+                ++g_hSync[ms < 1.0 ? 0 : ms < 5.0 ? 1 : ms < 11.0 ? 2 : ms < 50.0 ? 3 : ms <= 200.0 ? 4 : 5];
+                if (capped) ++g_hSyncCapped;
+                const uint32_t us = ms > 4.0e6 ? 0xffffffffu : (uint32_t)(ms * 1000.0);
+                if (us > g_hSyncMaxUs.load()) g_hSyncMaxUs = us;
+                const int q = StereoGpuQueued();
+                if (q >= 0) ++g_hGpuAtEye1[q > 3 ? 3 : q];
+            }
             if (ms > 200.0) {
                 const uint64_t n = ++longWaits;
                 if (n <= 20 || n % 50 == 0)
@@ -801,8 +840,116 @@ bool R1Install() {
     const bool lf = DetourInstall(kLensFlareDraw, (void*)&hk_FlareDraw, (void**)&o_FlareDraw);  // D-225
     Log("r1: lens flare VR skip (D-225) %s", lf ? "installed" : "NOT installed");
     Log("r1: render-object record array guard (D-223) %s", rr ? "installed" : "NOT installed");
+    // D-336: the fog history fix (F-012) finds the fog pass by its vtable - on a build where it is not found it never applies
+    PartNote("FogHistoryFix (F-012, fog pass vtable)", GameVa(0x140df8b28ull) != 0, "fog pass vtable not found on this build");
     done = a && b;
     return done;
+}
+
+// D-336: one line of stereo health for the VR check - per-frame rates since the last call, the owner's own setup as the
+// reference ("expect"). Called from the render thread's VR check (one caller).
+void R1HealthText(char* out, size_t n) {
+    struct Snap {
+        uint64_t nat, afr, mono, flat, k1, k2, other, fog, fogSeen, fskip, fdraw, lag[4], sync[6], capped, gpu[4];
+    };
+    static Snap last{};
+    Snap s{};
+    s.nat = g_hNative; s.afr = g_hAfr; s.mono = g_hMono; s.flat = g_h2D;
+    s.k1 = g_hPartK1; s.k2 = g_hPartK2; s.other = g_hPartOther; s.fog = g_hFogFix; s.fogSeen = g_hFogSeen;
+    s.fskip = g_hFlareSkip; s.fdraw = g_hFlareDraw; s.capped = g_hSyncCapped;
+    for (int i = 0; i < 4; ++i) { s.lag[i] = g_hLagK1[i]; s.gpu[i] = g_hGpuAtEye1[i]; }
+    for (int i = 0; i < 6; ++i) s.sync[i] = g_hSync[i];
+    const uint64_t nat = s.nat - last.nat;
+    const double perNat = nat ? 1.0 / (double)nat : 0.0;
+    uint64_t lag[4], sync[6], gpu[4], lagN = 0, syncN = 0, gpuN = 0;
+    for (int i = 0; i < 4; ++i) { lag[i] = s.lag[i] - last.lag[i]; lagN += lag[i]; gpu[i] = s.gpu[i] - last.gpu[i]; gpuN += gpu[i]; }
+    for (int i = 0; i < 6; ++i) { sync[i] = s.sync[i] - last.sync[i]; syncN += sync[i]; }
+    auto pct = [](uint64_t a, uint64_t b) { return b ? 100.0 * (double)a / (double)b : 0.0; };
+    const uint32_t maxUs = g_hSyncMaxUs.exchange(0);
+    sprintf_s(out, n,
+        "frames native %llu / AFR %llu / mono %llu / flat 2D %llu | particle jobs per native frame: eye 0 %.2f, eye 1 %.2f "
+        "(expect 1 / 1), outside the kicks %llu | fog history fix per native frame %.2f (fog passes %.2f; expect equal) | "
+        "lens flares skipped %llu, drawn in VR %llu (expect 0 drawn) | render thread behind as eye 0 starts: 0 frames %.0f%%, "
+        "1 %.0f%%, 2 %.0f%%, 3+ %.0f%% | wait before eye 1: <1 ms %.0f%%, 1-5 %.0f%%, 5-11 %.0f%%, 11-50 %.0f%%, 50-200 %.0f%%, "
+        ">200 %.0f%%, max %.1f ms, gave up %llu (expect 0) | GPU frames still queued as eye 1 starts: 0 %.0f%%, 1 %.0f%%, "
+        "2 %.0f%%, 3+ %.0f%% | mask 0x%x",
+        (unsigned long long)nat, (unsigned long long)(s.afr - last.afr), (unsigned long long)(s.mono - last.mono),
+        (unsigned long long)(s.flat - last.flat), (double)(s.k1 - last.k1) * perNat, (double)(s.k2 - last.k2) * perNat,
+        (unsigned long long)(s.other - last.other), (double)(s.fog - last.fog) * perNat,
+        (double)(s.fogSeen - last.fogSeen) * perNat, (unsigned long long)(s.fskip - last.fskip),
+        (unsigned long long)(g_vr.load() ? s.fdraw - last.fdraw : 0), pct(lag[0], lagN), pct(lag[1], lagN),
+        pct(lag[2], lagN), pct(lag[3], lagN), pct(sync[0], syncN), pct(sync[1], syncN), pct(sync[2], syncN),
+        pct(sync[3], syncN), pct(sync[4], syncN), pct(sync[5], syncN), maxUs / 1000.0,
+        (unsigned long long)(s.capped - last.capped), pct(gpu[0], gpuN), pct(gpu[1], gpuN), pct(gpu[2], gpuN),
+        pct(gpu[3], gpuN), g_mask.load());
+    last = s;
+}
+
+namespace {
+// D-336: the class name of a game object from its vtable (MSVC x64 RTTI: vtable[-1] = complete object locator; +0x0c
+// type descriptor RVA, +0x14 the locator's own RVA; the type name ".?AVName@@" at type descriptor + 0x10)
+bool RttiName(uint64_t vt, char* out, size_t n) {
+    __try {
+        const uint8_t* col = *(const uint8_t* const*)(vt - 8);
+        if (!col || *(const int32_t*)col != 1) return false;
+        const int32_t td = *(const int32_t*)(col + 0x0c), self = *(const int32_t*)(col + 0x14);
+        const char* name = (const char*)(col - self + td + 0x10);
+        if (name[0] != '.' || name[1] != '?' || name[2] != 'A') return false;
+        name += 4;  // ".?AV" / ".?AU"
+        size_t i = 0;
+        while (i + 1 < n && name[i] && name[i] != '@') { out[i] = name[i]; ++i; }
+        out[i] = 0;
+        return i > 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool PassVtable(int i, uint64_t* vt) {
+    __try {
+        uint8_t* rec = &G<uint8_t>(0x142590b00) + (size_t)i * 0x88;
+        uint8_t* table = G<uint8_t*>(0x142d4e298);
+        const int idx = *(int*)(rec + 0x7c);
+        if (!table || idx < 0 || idx > 4096) return false;
+        uint8_t* pass = *(uint8_t**)(table + (int64_t)idx * 0xb0 + 0xa8);
+        if (!pass) return false;
+        *vt = *(uint64_t*)pass;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+}  // namespace
+
+// D-336: the render passes of the current frame by class name (repeats counted) - which effects this player's settings and
+// scene run, to compare with the owner's log. Read without locks (diagnostic; a pass list being rebuilt reads as partial).
+int R1PassNames(char* out, size_t n) {
+    if (!out || !n) return 0;
+    out[0] = 0;
+    if (!GameVa(0x142d24d04) || !GameVa(0x142590b00) || !GameVa(0x142d4e298)) return 0;
+    int count = 0;
+    __try { count = G<int>(0x142d24d04); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    if (count <= 0 || count > 1024) return 0;
+    struct Entry { uint64_t vt; int times; };
+    static Entry e[256];
+    int ne = 0;
+    for (int i = 0; i < count; ++i) {
+        uint64_t vt = 0;
+        if (!PassVtable(i, &vt)) continue;
+        int k = 0;
+        while (k < ne && e[k].vt != vt) ++k;
+        if (k < ne) { ++e[k].times; continue; }
+        if (ne < 256) e[ne++] = {vt, 1};
+    }
+    size_t len = 0;
+    for (int k = 0; k < ne && len + 64 < n; ++k) {
+        char name[96];
+        if (!RttiName(e[k].vt, name, sizeof(name)))
+            sprintf_s(name, "vt+0x%llx", (unsigned long long)(e[k].vt - (uint64_t)GetModuleHandleW(nullptr)));
+        const int w = e[k].times > 1 ? sprintf_s(out + len, n - len, "%s%s x%d", k ? ", " : "", name, e[k].times)
+                                     : sprintf_s(out + len, n - len, "%s%s", k ? ", " : "", name);
+        if (w > 0) len += (size_t)w;
+    }
+    return count;
 }
 
 void R1Observe(int frames) {
