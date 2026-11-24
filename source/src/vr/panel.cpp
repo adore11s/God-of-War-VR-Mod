@@ -454,7 +454,7 @@ void SmoothAim(int hand, float p[3], float d[3]) {
 // (transparent fill, white stroke); the windows follow the view slowly and are mandatory". Drawn with Direct2D +
 // DirectWrite (colour emoji, the built-in Montserrat) into a premultiplied bitmap, the panel's pattern behind, rounded.
 constexpr float kWelW = 1.3f, kWelDist = 1.6f;  // metres wide, metres in front of the head
-constexpr int kWelcomeVersion = 2;              // gowvr.ini welcome_seen below this = shown (D-328: 2 = the FIRST PERSON window)
+constexpr int kWelcomeVersion = 2;              // gowvr.ini welcome_seen below this = shown (D-328: 2 = the FIRST PERSON window; D-337: never raised for a new Ko-fi supporter - owner)
 int g_wPage = 0, g_wDrawnPage = -1;
 bool g_wHover = false, g_wDrawnHover = false;
 std::atomic<bool> g_wActive{false};
